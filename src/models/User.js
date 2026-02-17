@@ -13,6 +13,11 @@ const userSchema = new mongoose.Schema(
       enum: ["kurator", "ta", "mentor"],
       required: true
     },
+    specialization: {
+      type: String,
+      enum: ["web", "design", "both"],
+      default: "both"
+    },
     phone: {
       type: String,
       trim: true,

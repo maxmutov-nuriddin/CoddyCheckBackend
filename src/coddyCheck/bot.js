@@ -1,0 +1,176 @@
+﻿const env = require("../config/env");
+const CoddyTeacher = require("./models/CoddyTeacher");
+const { teacherMainKeyboard, adminMainKeyboard } = require("./keyboards");
+
+let coddyBot = null;
+let coddyMode = "disabled";
+
+function isAdmin(ctx) {
+  return env.coddyAdminIds.includes(Number(ctx.from?.id));
+}
+
+function userAllowed(ctx) {
+  if (!env.coddyAllowedIds.length) return true;
+  return env.coddyAllowedIds.includes(Number(ctx.from?.id));
+}
+
+function getMainKeyboard(ctx) {
+  return isAdmin(ctx) ? adminMainKeyboard : teacherMainKeyboard;
+}
+
+async function handleStart(ctx) {
+  const { id, first_name: firstName, username = "" } = ctx.from;
+
+  await CoddyTeacher.findOneAndUpdate(
+    { telegramId: id },
+    { name: firstName || username || "Teacher", username },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+
+  return ctx.reply(`Xush kelibsiz, ${firstName || "ustoz"}!`, {
+    reply_markup: {
+      keyboard: getMainKeyboard(ctx),
+      resize_keyboard: true
+    }
+  });
+}
+
+async function startCoddyCheckBot() {
+  if (!env.coddyBotToken) {
+    console.log("Coddy bot skipped: CODDY_BOT_TOKEN/BOT_TOKEN is missing");
+    return null;
+  }
+
+  let Telegraf;
+  let Scenes;
+  let session;
+
+  try {
+    ({ Telegraf, Scenes, session } = require("telegraf"));
+  } catch (error) {
+    console.error("Coddy bot skipped: telegraf dependency not found.");
+    console.error("Run: npm install telegraf luxon");
+    return null;
+  }
+
+  const teacherController = require("./controllers/teacherController");
+  const adminController = require("./controllers/adminController");
+  const startCoddyDailyReport = require("./jobs/dailyReport");
+
+  const attendanceScene = require("./scenes/attendanceScene");
+  const reportScene = require("./scenes/reportScene");
+  const settingsScene = require("./scenes/settingsScene");
+  const searchScene = require("./scenes/searchScene");
+  const editScene = require("./scenes/editScene");
+
+  coddyBot = new Telegraf(env.coddyBotToken);
+
+  const stage = new Scenes.Stage([attendanceScene, reportScene, settingsScene, searchScene, editScene]);
+  coddyBot.use(session());
+
+  coddyBot.use(async (ctx, next) => {
+    if (!ctx.from) return next();
+
+    if (!userAllowed(ctx)) {
+      return ctx.reply("Siz ushbu botdan foydalanish ro'yxatida emassiz.");
+    }
+
+    return next();
+  });
+
+  coddyBot.use(stage.middleware());
+
+  coddyBot.start(handleStart);
+
+  coddyBot.hears("➕ O'quvchi belgilash", (ctx) => ctx.scene.enter("coddy_attendance_wizard"));
+  coddyBot.hears("📓 Mening yozuvlarim", teacherController.listMyMarks);
+  coddyBot.hears("⚙️ Sozlamalar", (ctx) => ctx.scene.enter("coddy_settings_scene"));
+  coddyBot.hears("ℹ️ Yordam", (ctx) =>
+    ctx.reply(
+      "Yangi yozuv uchun '➕ O'quvchi belgilash' ni bosing.\n" +
+        "Hisobot va qidiruv adminlar uchun ochiq."
+    )
+  );
+
+  coddyBot.hears("📊 Hisobot", (ctx) => {
+    if (!isAdmin(ctx)) return;
+    return adminController.startReportFlow(ctx);
+  });
+
+  coddyBot.hears("🔍 Qidiruv", (ctx) => {
+    if (!isAdmin(ctx)) return;
+    return ctx.scene.enter("coddy_search_scene");
+  });
+
+  coddyBot.hears("🔙 Orqaga", (ctx) =>
+    ctx.reply("Asosiy menyu", {
+      reply_markup: {
+        keyboard: getMainKeyboard(ctx),
+        resize_keyboard: true
+      }
+    })
+  );
+
+  coddyBot.action(/^coddy_delete_mark_(.+)$/, teacherController.deleteMark);
+  coddyBot.action(/^coddy_edit_mark_(.+)$/, teacherController.editMark);
+
+  startCoddyDailyReport(coddyBot);
+
+  try {
+    if (env.nodeEnv === "production" && env.coddyPublicUrl) {
+      const webhookUrl = `${env.coddyPublicUrl}/api/telegram/coddy`;
+      await coddyBot.telegram.deleteWebhook({ drop_pending_updates: true });
+      await coddyBot.telegram.setWebhook(webhookUrl);
+      coddyMode = "webhook";
+      console.log(`Coddy bot started in webhook mode: ${webhookUrl}`);
+    } else {
+      await coddyBot.telegram.deleteWebhook({ drop_pending_updates: true });
+      await coddyBot.launch();
+      coddyMode = "polling";
+      console.log("Coddy bot started in polling mode");
+    }
+  } catch (error) {
+    coddyBot = null;
+    coddyMode = "failed";
+    console.error("Failed to start Coddy bot:", error.message);
+    return null;
+  }
+
+  return coddyBot;
+}
+
+async function handleCoddyWebhook(req, res) {
+  if (!coddyBot) {
+    return res.status(503).json({ success: false, message: "Coddy bot is not running" });
+  }
+
+  try {
+    await coddyBot.handleUpdate(req.body, res);
+  } catch (error) {
+    console.error("Coddy webhook error:", error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: "Coddy webhook failed" });
+    }
+  }
+
+  return undefined;
+}
+
+function stopCoddyCheckBot(signal = "stop") {
+  if (!coddyBot) return;
+  coddyBot.stop(signal);
+}
+
+function getCoddyBotStatus() {
+  return {
+    enabled: Boolean(coddyBot),
+    mode: coddyMode
+  };
+}
+
+module.exports = {
+  startCoddyCheckBot,
+  stopCoddyCheckBot,
+  handleCoddyWebhook,
+  getCoddyBotStatus
+};

@@ -1,6 +1,7 @@
 ﻿const cron = require("node-cron");
 const Attendance = require("../models/Attendance");
 const User = require("../models/User");
+const TaNotificationTask = require("../models/TaNotificationTask");
 const { sendTelegramMessage } = require("../services/telegramService");
 const { addDays, formatYMD, getDayBounds } = require("../utils/date");
 const env = require("../config/env");
@@ -61,6 +62,49 @@ async function sendReminderToTAs({ dateInput, hourTag, includeButtons }) {
   }
 }
 
+async function sendScheduledTaNotifications() {
+  const today = new Date();
+  const { start, end } = getDayBounds(today);
+
+  const tasks = await TaNotificationTask.find({
+    status: "pending",
+    date: { $gte: start, $lte: end }
+  }).sort({ createdAt: 1 });
+
+  for (const task of tasks) {
+    const tas = await User.find({
+      role: "ta",
+      isActive: true,
+      telegramId: { $ne: null },
+      $or: [{ specialization: { $in: [task.direction, "both"] } }, { specialization: { $exists: false } }]
+    });
+
+    const lines = [
+      `<b>08:00 eslatma (${formatYMD(task.date)})</b>`,
+      `Yo'nalish: ${task.direction.toUpperCase()}`,
+      `O'quvchi: ${task.studentName}`,
+      task.time ? `Kelish vaqti: ${task.time}` : "",
+      task.comment ? `Izoh: ${task.comment}` : ""
+    ].filter(Boolean);
+
+    const text = lines.join("\n");
+    let sentCount = 0;
+
+    for (const ta of tas) {
+      try {
+        await sendTelegramMessage({ telegramId: ta.telegramId, text });
+        sentCount += 1;
+      } catch (error) {
+        console.error(`Direction send failed for TA ${ta._id}: ${error.message}`);
+      }
+    }
+
+    task.status = sentCount > 0 ? "sent" : "failed";
+    task.sentAt = new Date();
+    await task.save();
+  }
+}
+
 function startAttendanceJobs() {
   cron.schedule(
     "0 20 * * *",
@@ -79,6 +123,7 @@ function startAttendanceJobs() {
     "0 8 * * *",
     async () => {
       const today = new Date();
+      await sendScheduledTaNotifications();
       await sendReminderToTAs({
         dateInput: today,
         hourTag: "08:00",

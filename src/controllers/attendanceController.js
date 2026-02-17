@@ -1,5 +1,7 @@
 ﻿const Attendance = require("../models/Attendance");
 const Student = require("../models/Student");
+const TaNotificationTask = require("../models/TaNotificationTask");
+const CoddyAttendance = require("../coddyCheck/models/CoddyAttendance");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { created, ok } = require("../utils/response");
@@ -34,6 +36,42 @@ function buildDateTime(dateInput, timeInput) {
   return date;
 }
 
+function normalizeDirection(input) {
+  const value = String(input || "").trim().toLowerCase();
+  return value === "web" || value === "design" ? value : null;
+}
+
+function normalizeOptionalTime(input) {
+  const value = String(input || "").trim();
+  if (!value) return "";
+
+  if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(value)) {
+    throw new ApiError(400, "time must be HH:mm format");
+  }
+
+  return value;
+}
+
+function resolveNotifyDate(dateInput) {
+  if (dateInput) {
+    const selected = normalizeDateOnly(dateInput);
+    const today = normalizeDateOnly(new Date());
+    if (selected < today) {
+      throw new ApiError(400, "date bugundan oldin bo'lishi mumkin emas");
+    }
+    return selected;
+  }
+
+  const now = new Date();
+  const defaultDate = new Date(now);
+  if (now.getHours() >= 8) {
+    defaultDate.setDate(defaultDate.getDate() + 1);
+  }
+
+  defaultDate.setHours(0, 0, 0, 0);
+  return defaultDate;
+}
+
 const manualAttendance = asyncHandler(async (req, res) => {
   const { studentId, date, attendanceStatus, comment = "" } = req.body;
 
@@ -65,6 +103,30 @@ const manualAttendance = asyncHandler(async (req, res) => {
   });
 
   return created(res, attendance, "Manual attendance created");
+});
+
+const queueTaNotification = asyncHandler(async (req, res) => {
+  const { studentName, direction, date, time = "", comment = "" } = req.body;
+  const normalizedName = String(studentName || "").trim().replace(/\s+/g, " ");
+  const normalizedDirection = normalizeDirection(direction);
+
+  if (!normalizedName || !normalizedDirection) {
+    throw new ApiError(400, "studentName and valid direction (web/design) are required");
+  }
+
+  const notifyDate = resolveNotifyDate(date);
+  const notifyTime = normalizeOptionalTime(time);
+
+  const task = await TaNotificationTask.create({
+    studentName: normalizedName,
+    direction: normalizedDirection,
+    date: notifyDate,
+    time: notifyTime,
+    comment: String(comment || "").trim(),
+    createdBy: req.user._id
+  });
+
+  return created(res, task, "TA xabarnomasi 08:00 uchun rejalashtirildi");
 });
 
 const callStudent = asyncHandler(async (req, res) => {
@@ -229,6 +291,56 @@ const getDailyReport = asyncHandler(async (req, res) => {
   });
 });
 
+const getRecentActivity = asyncHandler(async (req, res) => {
+  const { date, status = "Barchasi", search = "", sort = "date-desc" } = req.query;
+
+  const query = {};
+  if (date) {
+    query.date = date;
+  }
+
+  const rows = await CoddyAttendance.find(query).sort({ date: -1, time: -1, createdAt: -1 });
+
+  const q = String(search || "").trim().toLowerCase();
+
+  let mapped = rows
+    .map((row) => ({
+      id: row._id,
+      date: row.date,
+      time: row.time,
+      mentor: row.mainTeacher,
+      group: row.studentGroup,
+      student: row.studentName,
+      status: row.status || "Keldi",
+      comment: row.topic,
+      ta: row.teacherName,
+      source: "bot"
+    }))
+    .filter((row) => {
+      if (!q) return true;
+      const haystack = [row.student, row.group, row.mentor, row.ta, row.comment, row.status]
+        .map((part) => String(part || "").toLowerCase())
+        .join(" ");
+      return haystack.includes(q);
+    });
+
+  if (status !== "Barchasi") {
+    mapped = mapped.filter((row) => row.status === status);
+  }
+
+  if (sort === "date-asc") {
+    mapped.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+  } else if (sort === "student-asc") {
+    mapped.sort((a, b) => String(a.student).localeCompare(String(b.student)));
+  } else if (sort === "student-desc") {
+    mapped.sort((a, b) => String(b.student).localeCompare(String(a.student)));
+  } else {
+    mapped.sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`));
+  }
+
+  return ok(res, mapped, "Recent activity list");
+});
+
 const telegramWebhook = asyncHandler(async (req, res) => {
   if (env.telegramWebhookSecret) {
     const incomingSecret = req.headers["x-telegram-bot-api-secret-token"];
@@ -266,11 +378,14 @@ const telegramWebhook = asyncHandler(async (req, res) => {
 
 module.exports = {
   manualAttendance,
+  queueTaNotification,
   callStudent,
   confirmArrival,
   updateStatus,
   recallStudent,
   getCalledList,
   getDailyReport,
+  getRecentActivity,
   telegramWebhook
 };
+

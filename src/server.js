@@ -3,12 +3,14 @@ const connectDb = require("./config/db");
 const env = require("./config/env");
 const startAttendanceJobs = require("./cron/attendanceJobs");
 const { ensureDefaultGroups } = require("./services/groupService");
+const { startCoddyCheckBot, stopCoddyCheckBot } = require("./coddyCheck/bot");
 
 async function bootstrap() {
   try {
     await connectDb();
     await ensureDefaultGroups();
     startAttendanceJobs();
+    await startCoddyCheckBot();
 
     app.listen(env.port, () => {
       console.log(`Server listening on port ${env.port}`);
@@ -20,3 +22,6 @@ async function bootstrap() {
 }
 
 bootstrap();
+
+process.once("SIGINT", () => stopCoddyCheckBot("SIGINT"));
+process.once("SIGTERM", () => stopCoddyCheckBot("SIGTERM"));

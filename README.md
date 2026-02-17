@@ -8,11 +8,13 @@ Node.js + Express + MongoDB (Mongoose) backend for attendance, call-status and T
 - JWT auth
 - node-cron
 - Telegram Bot API
+- Coddy Check bot module (Telegraf)
 
 ## Project Structure
 
 ```txt
 src/
+ ├── coddyCheck/         # imported Coddy Check bot logic
  ├── config/
  ├── controllers/
  ├── services/
@@ -28,9 +30,14 @@ src/
 ## Setup
 
 1. Create `.env` from `.env.example`
-2. Fill `MONGO_URI`, `JWT_SECRET`, `TELEGRAM_BOT_TOKEN`
-3. Install deps: `npm install`
-4. Run dev: `npm run dev`
+2. Fill base vars: `MONGO_URI`, `JWT_SECRET`
+3. (Optional) Fill Coddy bot vars if bot ishlasin:
+   - `CODDY_BOT_TOKEN` (or `BOT_TOKEN`)
+   - `CODDY_PUBLIC_URL` (or `PUBLIC_URL`) for webhook in production
+   - `CODDY_ADMIN_IDS` (or `ADMIN_IDS`)
+   - `CODDY_ALLOWED_IDS` (or `ALLOWED_IDS`)
+4. Install deps: `npm install`
+5. Run dev: `npm run dev`
 
 ## Access Policy (Updated)
 - Web/API login: **only `kurator`**
@@ -43,6 +50,8 @@ src/
 - `students`
 - `attendances`
 - `attendancestatuslogs`
+- `coddyteachers`
+- `coddyattendances`
 
 ## API Endpoints
 
@@ -68,12 +77,16 @@ src/
   - `GET /api/attendance/called?date=YYYY-MM-DD`
   - `GET /api/attendance/report?date=YYYY-MM-DD`
 
+### Coddy Bot Webhook
+- `POST /api/telegram/coddy` (used by Coddy Check webhook mode)
+
 ## Cron Jobs
 - `0 20 * * *` -> tomorrow called students reminder to TAs
 - `0 8 * * *` -> today called students + inline `Keldi/Kelmadi` buttons
 - `59 23 * * *` -> auto close null attendance:
   - if `arrivalConfirmedAt` exists => `keldi`
   - otherwise => `kelmadi`
+- `0 20 * * *` (Coddy module) -> daily Coddy bot report to admins + personal support summary
 
 ## Business Rules Implemented
 - `callStatus` and `attendanceStatus` are separate fields
@@ -86,3 +99,5 @@ src/
 ## Notes
 - Default groups `Toq` and `Juft` are auto-created on server start.
 - Telegram webhook can be protected via `TELEGRAM_WEBHOOK_SECRET` and header `x-telegram-bot-api-secret-token`.
+- Coddy bot starts automatically on server boot if `CODDY_BOT_TOKEN`/`BOT_TOKEN` mavjud bo'lsa.
+
