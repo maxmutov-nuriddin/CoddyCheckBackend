@@ -3,6 +3,7 @@ const { DateTime } = require("luxon");
 const env = require("../../config/env");
 const CoddyAttendance = require("../models/CoddyAttendance");
 const { teacherMainKeyboard } = require("../keyboards");
+const { resolveMentorDisplayName } = require("../utils/mentorNameResolver");
 
 const { WizardScene } = Scenes;
 
@@ -44,18 +45,29 @@ const attendanceScene = new WizardScene(
     ctx.reply("Asosiy ustoz ismini kiriting:", cancelKeyboard);
     return ctx.wizard.next();
   },
-  (ctx) => {
+  async (ctx) => {
     if (ctx.message?.text === "❌ Bekor qilish") {
       ctx.reply("Bekor qilindi", Markup.keyboard(teacherMainKeyboard).resize());
       return ctx.scene.leave();
     }
 
-    const mainTeacher = String(ctx.message?.text || "").trim();
-    if (!mainTeacher) {
+    const mainTeacherInput = String(ctx.message?.text || "").trim();
+    if (!mainTeacherInput) {
       return ctx.reply("Ustoz ismini kiriting.");
     }
 
+    let mainTeacher = mainTeacherInput;
+    try {
+      mainTeacher = await resolveMentorDisplayName(mainTeacherInput);
+    } catch (error) {
+      console.error("mentor resolve error:", error.message);
+    }
     ctx.wizard.state.mainTeacher = mainTeacher;
+
+    if (mainTeacher !== mainTeacherInput) {
+      await ctx.reply(`Asosiy ustoz moslandi: ${mainTeacher}`);
+    }
+
     ctx.reply("Mavzu/izoh kiriting:", cancelKeyboard);
     return ctx.wizard.next();
   },

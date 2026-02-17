@@ -8,6 +8,7 @@ const { created, ok } = require("../utils/response");
 const { getDayBounds, formatYMD } = require("../utils/date");
 const { updateAttendanceStatus } = require("../services/attendanceService");
 const env = require("../config/env");
+const { loadActiveStaffForMatching, resolveMentorNameFromWorkers } = require("../coddyCheck/utils/mentorNameResolver");
 
 function normalizeDateOnly(dateInput) {
   const date = new Date(dateInput);
@@ -300,6 +301,7 @@ const getRecentActivity = asyncHandler(async (req, res) => {
   }
 
   const rows = await CoddyAttendance.find(query).sort({ date: -1, time: -1, createdAt: -1 });
+  const staff = await loadActiveStaffForMatching();
 
   const q = String(search || "").trim().toLowerCase();
 
@@ -308,7 +310,7 @@ const getRecentActivity = asyncHandler(async (req, res) => {
       id: row._id,
       date: row.date,
       time: row.time,
-      mentor: row.mainTeacher,
+      mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
       group: row.studentGroup,
       student: row.studentName,
       status: row.status || "Keldi",
