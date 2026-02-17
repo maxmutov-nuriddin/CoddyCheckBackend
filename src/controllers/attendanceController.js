@@ -295,36 +295,73 @@ const getDailyReport = asyncHandler(async (req, res) => {
 const getRecentActivity = asyncHandler(async (req, res) => {
   const { date, status = "Barchasi", search = "", sort = "date-desc" } = req.query;
 
-  const query = {};
+  const coddyQuery = {};
+  const attendanceQuery = {};
+
   if (date) {
-    query.date = date;
+    const { start, end } = getDayBounds(date);
+    coddyQuery.date = formatYMD(start);
+    attendanceQuery.date = { $gte: start, $lte: end };
   }
 
-  const rows = await CoddyAttendance.find(query).sort({ date: -1, time: -1, createdAt: -1 });
-  const staff = await loadActiveStaffForMatching();
+  const [botRows, webRows, staff] = await Promise.all([
+    CoddyAttendance.find(coddyQuery).sort({ date: -1, time: -1, createdAt: -1 }),
+    Attendance.find(attendanceQuery)
+      .populate("studentId", "fullName")
+      .populate("groupId", "name")
+      .populate("mentorId", "fullName")
+      .populate("taId", "fullName")
+      .sort({ date: -1, time: -1, createdAt: -1 }),
+    loadActiveStaffForMatching()
+  ]);
 
   const q = String(search || "").trim().toLowerCase();
 
-  let mapped = rows
-    .map((row) => ({
-      id: row._id,
-      date: row.date,
-      time: row.time,
-      mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
-      group: row.studentGroup,
-      student: row.studentName,
-      status: row.status || "Keldi",
-      comment: row.topic,
-      ta: row.teacherName,
-      source: "bot"
-    }))
-    .filter((row) => {
-      if (!q) return true;
-      const haystack = [row.student, row.group, row.mentor, row.ta, row.comment, row.status]
-        .map((part) => String(part || "").toLowerCase())
-        .join(" ");
-      return haystack.includes(q);
-    });
+  const mappedBot = botRows.map((row) => ({
+    id: `bot-${row._id}`,
+    date: row.date,
+    time: row.time,
+    mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
+    group: row.studentGroup,
+    student: row.studentName,
+    status: row.status || "Keldi",
+    comment: row.topic,
+    ta: row.teacherName,
+    source: "bot"
+  }));
+
+  const mappedWeb = webRows.map((row) => {
+    const statusLabel =
+      row.attendanceStatus === "keldi"
+        ? "Keldi"
+        : row.attendanceStatus === "kelmadi"
+          ? "Kelmadi"
+          : "Kutilmoqda";
+
+    const timeLabel = row.time ? new Date(row.time).toTimeString().slice(0, 5) : "--:--";
+
+    return {
+      id: `web-${row._id}`,
+      date: formatYMD(row.date),
+      time: timeLabel,
+      mentor: row.mentorId?.fullName || "-",
+      group: row.groupId?.name || "-",
+      student: row.studentId?.fullName || "Deleted student",
+      status: statusLabel,
+      comment: row.comment || "",
+      ta: row.taId?.fullName || "-",
+      source: "web",
+      callStatus: row.callStatus || "chaqirilmagan"
+    };
+  });
+
+  let mapped = [...mappedWeb, ...mappedBot].filter((row) => {
+    if (!q) return true;
+    const haystack = [row.student, row.group, row.mentor, row.ta, row.comment, row.status, row.callStatus]
+      .map((part) => String(part || "").toLowerCase())
+      .join(" ");
+    return haystack.includes(q);
+  });
 
   if (status !== "Barchasi") {
     mapped = mapped.filter((row) => row.status === status);
@@ -390,4 +427,5 @@ module.exports = {
   getRecentActivity,
   telegramWebhook
 };
+
 
