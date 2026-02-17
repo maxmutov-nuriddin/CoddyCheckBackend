@@ -16,9 +16,10 @@ async function bootstrap() {
     });
 
     // Bot start should not block HTTP API startup.
-    startCoddyCheckBot().catch((error) => {
-      console.error("Coddy bot start failed:", error.message);
-    });
+    // Bot startup commented out for debugging SSL/500 error
+    // startCoddyCheckBot().catch((error) => {
+    //   console.error("Coddy bot start failed:", error.message);
+    // });
   } catch (error) {
     console.error("Failed to bootstrap server:", error.message);
     process.exit(1);

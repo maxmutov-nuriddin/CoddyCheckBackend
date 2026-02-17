@@ -73,8 +73,8 @@ async function handleStart(ctx) {
 }
 
 async function startCoddyCheckBot() {
-  if (!env.coddyBotToken) {
-    console.log("Coddy bot skipped: CODDY_BOT_TOKEN/BOT_TOKEN is missing");
+  if (!env.coddyBotToken || env.coddyBotToken === "disabled") {
+    console.log("Coddy bot skipped: CODDY_BOT_TOKEN is missing or disabled");
     return null;
   }
 
@@ -142,7 +142,7 @@ async function startCoddyCheckBot() {
   coddyBot.hears("ℹ️ Yordam", (ctx) =>
     ctx.reply(
       "Mentor uchun: '📣 O'quvchi chaqirish' tugmasi mavjud.\n" +
-        "Qo'shimcha yozuv uchun: '➕ O'quvchi belgilash'."
+      "Qo'shimcha yozuv uchun: '➕ O'quvchi belgilash'."
     )
   );
 

@@ -83,7 +83,10 @@ const register = asyncHandler(async (req, res) => {
     password: FIXED_KURATOR_PASSWORD
   });
 
+  console.log("User created in DB:", user._id);
+
   const token = signToken(user);
+  console.log("Token generated for:", user._id);
 
   return created(
     res,

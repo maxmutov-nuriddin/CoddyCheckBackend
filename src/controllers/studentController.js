@@ -22,7 +22,7 @@ const getStudents = asyncHandler(async (req, res) => {
 });
 
 const createStudent = asyncHandler(async (req, res) => {
-  const { fullName, groupId, frozenStatus = null, comment = "" } = req.body;
+  const { fullName, groupId, frozenStatus = null, comment = "", profileUrl = "" } = req.body;
 
   if (!fullName || !groupId) {
     throw new ApiError(400, "fullName and groupId are required");
@@ -37,7 +37,8 @@ const createStudent = asyncHandler(async (req, res) => {
     fullName,
     groupId,
     frozenStatus,
-    comment
+    comment,
+    profileUrl
   });
 
   return created(res, student, "Student created");
@@ -45,7 +46,7 @@ const createStudent = asyncHandler(async (req, res) => {
 
 const updateStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { fullName, groupId, frozenStatus, comment, isActive } = req.body;
+  const { fullName, groupId, frozenStatus, comment, isActive, profileUrl } = req.body;
 
   const student = await Student.findById(id);
   if (!student) {
@@ -63,6 +64,7 @@ const updateStudent = asyncHandler(async (req, res) => {
   if (typeof fullName !== "undefined") student.fullName = fullName;
   if (typeof frozenStatus !== "undefined") student.frozenStatus = frozenStatus;
   if (typeof comment !== "undefined") student.comment = comment;
+  if (typeof profileUrl !== "undefined") student.profileUrl = profileUrl;
   if (typeof isActive !== "undefined") student.isActive = Boolean(isActive);
 
   await student.save();

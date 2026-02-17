@@ -4,12 +4,26 @@ const groupSchema = new mongoose.Schema(
   {
     name: {
       type: String,
-      enum: ["Toq", "Juft"],
       required: true,
-      unique: true
+      trim: true
+    },
+    days: {
+      type: String,
+      enum: ["Toq", "Juft"],
+      required: true
+    },
+    time: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    mentor: {
+      type: String,
+      required: true,
+      trim: true
     }
   },
-  { timestamps: { createdAt: true, updatedAt: false } }
+  { timestamps: true }
 );
 
 module.exports = mongoose.model("Group", groupSchema);

@@ -14,10 +14,14 @@ const studentSchema = new mongoose.Schema(
     },
     frozenStatus: {
       type: String,
-      enum: ["qarzdor", "qaytadi", "muzlatilgan", null],
-      default: null
+      enum: ["average", "frozen", "poor", "good", "lead", "qarzdor", "qaytadi", "muzlatilgan", null],
+      default: "good"
     },
     comment: {
+      type: String,
+      default: ""
+    },
+    profileUrl: {
       type: String,
       default: ""
     },
