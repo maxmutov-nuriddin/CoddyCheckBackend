@@ -10,10 +10,14 @@ async function bootstrap() {
     await connectDb();
     await ensureDefaultGroups();
     startAttendanceJobs();
-    await startCoddyCheckBot();
 
     app.listen(env.port, () => {
       console.log(`Server listening on port ${env.port}`);
+    });
+
+    // Bot start should not block HTTP API startup.
+    startCoddyCheckBot().catch((error) => {
+      console.error("Coddy bot start failed:", error.message);
     });
   } catch (error) {
     console.error("Failed to bootstrap server:", error.message);

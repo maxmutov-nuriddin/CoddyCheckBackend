@@ -4,6 +4,7 @@ const env = require("../../config/env");
 const CoddyAttendance = require("../models/CoddyAttendance");
 const { getWorkerMainKeyboard } = require("../keyboards");
 const { resolveMentorDisplayName } = require("../utils/mentorNameResolver");
+const { normalizeGroupName } = require("../utils/normalizeGroupName");
 
 const { WizardScene } = Scenes;
 
@@ -45,7 +46,7 @@ const attendanceScene = new WizardScene(
       return ctx.reply("Guruh kiriting.");
     }
 
-    ctx.wizard.state.studentGroup = studentGroup;
+    ctx.wizard.state.studentGroup = normalizeGroupName(studentGroup);
     ctx.reply("Asosiy ustoz ismini kiriting:", cancelKeyboard);
     return ctx.wizard.next();
   },

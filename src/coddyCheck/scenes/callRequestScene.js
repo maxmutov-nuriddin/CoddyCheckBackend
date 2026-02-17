@@ -3,6 +3,7 @@ const { DateTime } = require("luxon");
 const env = require("../../config/env");
 const CoddyAttendance = require("../models/CoddyAttendance");
 const { getWorkerMainKeyboard } = require("../keyboards");
+const { normalizeGroupName } = require("../utils/normalizeGroupName");
 
 const { WizardScene } = Scenes;
 
@@ -86,6 +87,7 @@ const callRequestScene = new WizardScene(
       return ctx.reply("Guruhini kiriting.");
     }
 
+    const normalizedGroup = normalizeGroupName(studentGroup);
     const requestType = ctx.wizard.state.requestType;
     const studentName = ctx.wizard.state.studentName;
 
@@ -104,7 +106,7 @@ const callRequestScene = new WizardScene(
         teacherId: ctx.from.id,
         teacherName: workerName,
         studentName,
-        studentGroup,
+        studentGroup: normalizedGroup,
         mainTeacher: workerName,
         topic: `So'rov: ${requestLabel}`,
         date,

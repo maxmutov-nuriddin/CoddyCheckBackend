@@ -1,6 +1,7 @@
 ﻿const { Scenes, Markup } = require("telegraf");
 const CoddyAttendance = require("../models/CoddyAttendance");
 const { teacherMainKeyboard } = require("../keyboards");
+const { normalizeGroupName } = require("../utils/normalizeGroupName");
 
 const { WizardScene } = Scenes;
 
@@ -85,8 +86,11 @@ const editScene = new WizardScene(
     const { markId, fieldToEdit, fieldLabel } = ctx.wizard.state;
 
     try {
-      await CoddyAttendance.findByIdAndUpdate(markId, { [fieldToEdit]: String(value).trim() });
-      await ctx.reply(`✅ Yangilandi: ${fieldLabel} -> ${String(value).trim()}`, Markup.keyboard(teacherMainKeyboard).resize());
+      const trimmedValue = String(value).trim();
+      const finalValue = fieldToEdit === "studentGroup" ? normalizeGroupName(trimmedValue) : trimmedValue;
+
+      await CoddyAttendance.findByIdAndUpdate(markId, { [fieldToEdit]: finalValue });
+      await ctx.reply(`✅ Yangilandi: ${fieldLabel} -> ${trimmedValue}`, Markup.keyboard(teacherMainKeyboard).resize());
     } catch (error) {
       console.error("edit scene error:", error);
       await ctx.reply("Saqlashda xatolik.", Markup.keyboard(teacherMainKeyboard).resize());

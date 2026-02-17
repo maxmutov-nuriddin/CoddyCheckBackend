@@ -2,87 +2,104 @@
 const { DateTime } = require("luxon");
 const env = require("../../config/env");
 const CoddyAttendance = require("../models/CoddyAttendance");
-const CoddyTeacher = require("../models/CoddyTeacher");
+
+let dailyReportTask = null;
+let isSendingReport = false;
+
+function normalizeTelegramId(value) {
+  return String(value || "").trim();
+}
+
+function statusKey(value) {
+  const s = String(value || "").trim().toLowerCase();
+  if (s === "keldi") return "keldi";
+  if (s === "kelmadi") return "kelmadi";
+  return "kutilmoqda";
+}
+
+function buildTaSummaryReport(dateStr, records) {
+  const statsByTa = new Map();
+
+  for (const row of records) {
+    const taName = String(row.teacherName || "Noma'lum TA").trim() || "Noma'lum TA";
+
+    if (!statsByTa.has(taName)) {
+      statsByTa.set(taName, {
+        total: 0,
+        keldi: 0,
+        kelmadi: 0,
+        kutilmoqda: 0
+      });
+    }
+
+    const bucket = statsByTa.get(taName);
+    bucket.total += 1;
+    bucket[statusKey(row.status)] += 1;
+  }
+
+  const sorted = [...statsByTa.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const lines = [
+    `📅 Kunlik hisobot (${dateStr})`,
+    `Jami yozuv: ${records.length}`,
+    "",
+    "👥 TA bo'yicha:"
+  ];
+
+  if (sorted.length === 0) {
+    lines.push("- Ma'lumot yo'q");
+  } else {
+    sorted.forEach(([taName, s], idx) => {
+      lines.push(
+        `${idx + 1}. ${taName}`,
+        `   Jami: ${s.total} | Keldi: ${s.keldi} | Kelmadi: ${s.kelmadi} | Kutilmoqda: ${s.kutilmoqda}`
+      );
+    });
+  }
+
+  return lines.join("\n");
+}
 
 async function sendDailyReport(bot) {
+  if (isSendingReport) {
+    return;
+  }
+
+  isSendingReport = true;
+
   try {
     const dateStr = DateTime.now().setZone(env.appTimezone).toFormat("yyyy-MM-dd");
+    const records = await CoddyAttendance.find({ date: dateStr }).sort({ teacherName: 1, time: 1, createdAt: 1 });
 
-    const records = await CoddyAttendance.find({ date: dateStr }).sort({ teacherName: 1, studentGroup: 1, time: 1 });
-    const adminIds = env.coddyAdminIds;
-
+    const adminIds = [...new Set((env.coddyAdminIds || []).map(normalizeTelegramId).filter(Boolean))];
     if (!adminIds.length) {
       return;
     }
 
-    if (!records.length) {
-      for (const adminId of adminIds) {
-        try {
-          await bot.telegram.sendMessage(adminId, `📅 Bugungi hisobot (${dateStr})\nYozuv yo'q.`);
-        } catch (error) {
-          console.error(`Failed to send empty report to ${adminId}:`, error.message);
-        }
-      }
-      return;
-    }
-
-    let report = `📅 Avtomatik hisobot (${dateStr})\n\n`;
-    let currentGroup = null;
-
-    records.forEach((row) => {
-      if (currentGroup !== row.studentGroup) {
-        currentGroup = row.studentGroup;
-        report += `━━━━━━━━━━\n🏫 GURUH: ${row.studentGroup}\n━━━━━━━━━━\n\n`;
-      }
-
-      report += `🕒 ${row.time}\n`;
-      report += `👤 O'quvchi: ${row.studentName}\n`;
-      report += `📚 Mavzu: ${row.topic}\n`;
-      report += `✌️ Support: ${row.teacherName}\n`;
-      report += `👨‍🏫 Asosiy ustoz: ${row.mainTeacher}\n\n`;
-    });
+    const message = records.length
+      ? buildTaSummaryReport(dateStr, records)
+      : `📅 Kunlik hisobot (${dateStr})\n\nMa'lumot yo'q.`;
 
     for (const adminId of adminIds) {
       try {
-        if (report.length > 4000) {
-          const chunks = report.match(/[\s\S]{1,4000}/g) || [];
-          for (const chunk of chunks) {
-            await bot.telegram.sendMessage(adminId, chunk);
-          }
-        } else {
-          await bot.telegram.sendMessage(adminId, report);
-        }
+        await bot.telegram.sendMessage(adminId, message);
       } catch (error) {
-        console.error(`Failed to send full report to ${adminId}:`, error.message);
-      }
-    }
-
-    const stats = records.reduce((acc, row) => {
-      const key = row.teacherName || "Noma'lum";
-      acc[key] = (acc[key] || 0) + 1;
-      return acc;
-    }, {});
-
-    const teachers = await CoddyTeacher.find({});
-    for (const teacher of teachers) {
-      if (adminIds.includes(teacher.telegramId)) continue;
-
-      const count = stats[teacher.name] || 0;
-      const message = `📊 Bugungi hisobot (${dateStr})\n\n✅ Siz ${count} ta o'quvchi belgiladingiz.`;
-
-      try {
-        await bot.telegram.sendMessage(teacher.telegramId, message);
-      } catch (error) {
-        console.error(`Failed to send teacher summary to ${teacher.telegramId}:`, error.message);
+        console.error(`Failed to send daily TA report to ${adminId}:`, error.message);
       }
     }
   } catch (error) {
     console.error("sendDailyReport error:", error);
+  } finally {
+    isSendingReport = false;
   }
 }
 
 function startCoddyDailyReport(bot) {
-  cron.schedule(
+  if (dailyReportTask) {
+    console.log("Coddy daily report cron already started");
+    return dailyReportTask;
+  }
+
+  dailyReportTask = cron.schedule(
     "0 20 * * *",
     async () => {
       await sendDailyReport(bot);
@@ -91,6 +108,7 @@ function startCoddyDailyReport(bot) {
   );
 
   console.log("Coddy daily report cron started (20:00)");
+  return dailyReportTask;
 }
 
 module.exports = startCoddyDailyReport;
