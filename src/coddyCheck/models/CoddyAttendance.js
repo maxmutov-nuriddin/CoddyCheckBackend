@@ -42,6 +42,11 @@ const coddyAttendanceSchema = new mongoose.Schema(
       enum: ["mark", "call_extra", "keep"],
       default: "mark"
     },
+    requesterRole: {
+      type: String,
+      enum: ["mentor", "ta", "mentor_ta", "unknown"],
+      default: "unknown"
+    },
     date: {
       type: String,
       required: true,

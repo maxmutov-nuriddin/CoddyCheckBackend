@@ -103,6 +103,7 @@ const attendanceScene = new WizardScene(
       }
 
       const teacherName = ctx.state?.worker?.fullName || ctx.from.first_name || ctx.from.username || "Unknown";
+      const requesterRole = String(ctx.state?.worker?.role || "unknown").toLowerCase();
 
       await CoddyAttendance.create({
         teacherId: ctx.from.id,
@@ -114,6 +115,7 @@ const attendanceScene = new WizardScene(
         date,
         time,
         status: "Keldi",
+        requesterRole,
         requestType: "mark"
       });
 

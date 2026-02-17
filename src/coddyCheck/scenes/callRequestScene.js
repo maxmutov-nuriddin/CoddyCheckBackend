@@ -91,7 +91,8 @@ const callRequestScene = new WizardScene(
 
     const workerName =
       ctx.state?.worker?.fullName || ctx.from.first_name || ctx.from.username || "Unknown";
-    const workerRole = roleLabel(ctx.state?.worker?.role);
+    const workerRoleRaw = String(ctx.state?.worker?.role || "unknown").toLowerCase();
+    const workerRole = roleLabel(workerRoleRaw);
 
     const now = DateTime.now().setZone(env.appTimezone || "Asia/Tashkent");
     const date = now.toFormat("yyyy-MM-dd");
@@ -109,6 +110,7 @@ const callRequestScene = new WizardScene(
         date,
         time,
         status: "Kutilmoqda",
+        requesterRole: workerRoleRaw,
         requestType
       });
 

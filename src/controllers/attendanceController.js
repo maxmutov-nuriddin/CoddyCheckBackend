@@ -327,7 +327,9 @@ const getRecentActivity = asyncHandler(async (req, res) => {
     status: row.status || "Keldi",
     comment: row.topic,
     ta: row.teacherName,
-    source: "bot"
+    source: "bot",
+    requestType: row.requestType || "mark",
+    requesterRole: row.requesterRole || "unknown"
   }));
 
   const mappedWeb = webRows.map((row) => {
@@ -351,7 +353,9 @@ const getRecentActivity = asyncHandler(async (req, res) => {
       comment: row.comment || "",
       ta: row.taId?.fullName || "-",
       source: "web",
-      callStatus: row.callStatus || "chaqirilmagan"
+      callStatus: row.callStatus || "chaqirilmagan",
+      requestType: "web_attendance",
+      requesterRole: "web"
     };
   });
 
@@ -427,5 +431,10 @@ module.exports = {
   getRecentActivity,
   telegramWebhook
 };
+
+
+
+
+
 
 
