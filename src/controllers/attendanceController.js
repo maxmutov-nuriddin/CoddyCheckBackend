@@ -485,6 +485,19 @@ const telegramWebhook = asyncHandler(async (req, res) => {
   return ok(res, updated, "Attendance status updated from bot callback");
 });
 
+const deleteActivity = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  if (id.startsWith("bot-")) {
+    const coddyId = id.slice(4);
+    await CoddyAttendance.findByIdAndDelete(coddyId);
+  } else {
+    await Attendance.findByIdAndDelete(id);
+  }
+
+  return ok(res, null, "Record deleted permanently");
+});
+
 module.exports = {
   manualAttendance,
   queueTaNotification,
@@ -496,7 +509,8 @@ module.exports = {
   getCalledList,
   getDailyReport,
   getRecentActivity,
-  telegramWebhook
+  telegramWebhook,
+  deleteActivity
 };
 
 

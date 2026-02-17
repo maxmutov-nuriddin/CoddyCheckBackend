@@ -105,6 +105,83 @@ async function sendScheduledTaNotifications() {
   }
 }
 
+async function notifyAbsentCalledStudents() {
+  const today = new Date();
+  const { start, end } = getDayBounds(today);
+
+  // Find students called today but not marked as "keldi"
+  const absentStudents = await Attendance.find({
+    date: { $gte: start, $lte: end },
+    callStatus: "chaqirilgan",
+    attendanceStatus: { $ne: "keldi" }
+  })
+    .populate("studentId", "fullName")
+    .populate("groupId", "name")
+    .populate("mentorId", "fullName telegramId");
+
+  if (absentStudents.length === 0) {
+    return;
+  }
+
+  // Group by mentor
+  const byMentor = new Map();
+
+  for (const record of absentStudents) {
+    const mentorId = record.mentorId?._id?.toString();
+    if (!mentorId) continue;
+
+    if (!byMentor.has(mentorId)) {
+      byMentor.set(mentorId, {
+        mentor: record.mentorId,
+        students: []
+      });
+    }
+
+    byMentor.get(mentorId).students.push(record);
+  }
+
+  // Send notifications to mentors
+  for (const [mentorId, data] of byMentor) {
+    const { mentor, students } = data;
+
+    if (!mentor.telegramId) {
+      console.log(`Mentor ${mentor.fullName} has no telegramId, skipping notification`);
+      continue;
+    }
+
+    const studentList = students
+      .map((rec, idx) => {
+        const student = rec.studentId?.fullName || "Unknown";
+        const group = rec.groupId?.name || "-";
+        const time = rec.time ? new Date(rec.time).toTimeString().slice(0, 5) : "--:--";
+        return `${idx + 1}. ${student} (${group}) - ${time}`;
+      })
+      .join("\n");
+
+    const text = [
+      "⚠️ <b>Chaqirilgan talabalar kelmadi</b>",
+      "",
+      "Bugun siz chaqirgan ammo kelish belgilanmagan talabalar:",
+      "",
+      studentList,
+      "",
+      "Iltimos, tekshiring yoki qayta chaqiring."
+    ].join("\n");
+
+    try {
+      await sendTelegramMessage({
+        telegramId: mentor.telegramId,
+        text
+      });
+    } catch (error) {
+      console.error(`Failed to notify mentor ${mentor.fullName}:`, error.message);
+    }
+  }
+
+  // TODO: Send notifications to curators via platform
+  console.log(`Notified ${byMentor.size} mentors about ${absentStudents.length} absent students`);
+}
+
 function startAttendanceJobs() {
   cron.schedule(
     "0 20 * * *",
@@ -115,6 +192,9 @@ function startAttendanceJobs() {
         hourTag: "20:00",
         includeButtons: false
       });
+
+      // Check for absent called students
+      await notifyAbsentCalledStudents();
     },
     { timezone: env.appTimezone }
   );
