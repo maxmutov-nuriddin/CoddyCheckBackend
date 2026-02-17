@@ -54,8 +54,28 @@ const deleteGroup = asyncHandler(async (req, res) => {
    return ok(res, null, "Guruh o'chirildi");
 });
 
+const updateGroup = asyncHandler(async (req, res) => {
+   const { id } = req.params;
+   const { name, days, time, mentor } = req.body;
+
+   const group = await Group.findById(id);
+   if (!group) {
+      throw new ApiError(404, "Guruh topilmadi");
+   }
+
+   if (name) group.name = name;
+   if (days) group.days = days;
+   if (time) group.time = time;
+   if (mentor) group.mentor = mentor;
+
+   await group.save();
+
+   return ok(res, group, "Guruh yangilandi");
+});
+
 module.exports = {
    getGroups,
    createGroup,
-   deleteGroup
+   deleteGroup,
+   updateGroup
 };
