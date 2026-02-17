@@ -2,6 +2,7 @@
 const {
   manualAttendance,
   queueTaNotification,
+  confirmBotCallRequest,
   callStudent,
   confirmArrival,
   updateStatus,
@@ -23,6 +24,7 @@ router.use(allowRoles("kurator"));
 
 router.post("/manual", manualAttendance);
 router.post("/ta-notify", queueTaNotification);
+router.patch("/bot-request/:id/confirm", confirmBotCallRequest);
 router.post("/call", callStudent);
 router.patch("/:id/arrival-confirm", confirmArrival);
 router.patch("/:id/status", updateStatus);
@@ -32,3 +34,5 @@ router.get("/report", getDailyReport);
 router.get("/recent-activity", getRecentActivity);
 
 module.exports = router;
+
+

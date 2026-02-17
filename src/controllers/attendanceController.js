@@ -42,6 +42,11 @@ function normalizeDirection(input) {
   return value === "web" || value === "design" ? value : null;
 }
 
+function inferDirectionFromGroupName(groupName) {
+  const normalized = String(groupName || "").trim().toLowerCase();
+  return normalized.includes("design") ? "design" : "web";
+}
+
 function normalizeOptionalTime(input) {
   const value = String(input || "").trim();
   if (!value) return "";
@@ -128,6 +133,60 @@ const queueTaNotification = asyncHandler(async (req, res) => {
   });
 
   return created(res, task, "TA xabarnomasi 08:00 uchun rejalashtirildi");
+});
+
+const confirmBotCallRequest = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { date, time = "", comment = "" } = req.body;
+
+  const request = await CoddyAttendance.findById(id);
+  if (!request) {
+    throw new ApiError(404, "Bot so'rovi topilmadi");
+  }
+
+  const requestType = String(request.requestType || "").toLowerCase();
+  if (requestType !== "call_extra" && requestType !== "keep") {
+    throw new ApiError(400, "Faqat chaqirish so'rovlari tasdiqlanadi");
+  }
+
+  if (request.callConfirmed) {
+    return ok(res, request, "So'rov allaqachon tasdiqlangan");
+  }
+
+  const notifyDate = resolveNotifyDate(date);
+  const notifyTime = normalizeOptionalTime(time);
+  const direction = inferDirectionFromGroupName(request.studentGroup);
+  const normalizedComment = String(comment || request.topic || "").trim();
+
+  const task = await TaNotificationTask.create({
+    studentName: request.studentName,
+    direction,
+    date: notifyDate,
+    time: notifyTime,
+    comment: normalizedComment,
+    createdBy: req.user._id
+  });
+
+  request.callConfirmed = true;
+  request.confirmedAt = new Date();
+  request.status = "Kutilmoqda";
+  request.date = formatYMD(notifyDate);
+  request.time = notifyTime || request.time;
+
+  if (normalizedComment) {
+    request.topic = normalizedComment;
+  }
+
+  await request.save();
+
+  return ok(
+    res,
+    {
+      request,
+      task
+    },
+    "Bot so'rovi chaqirildi sifatida tasdiqlandi"
+  );
 });
 
 const callStudent = asyncHandler(async (req, res) => {
@@ -335,7 +394,8 @@ const getRecentActivity = asyncHandler(async (req, res) => {
     ta: row.teacherName,
     source: "bot",
     requestType: row.requestType || "mark",
-    requesterRole: row.requesterRole || roleByTelegramId.get(String(row.teacherId || "")) || "unknown"
+    requesterRole: row.requesterRole || roleByTelegramId.get(String(row.teacherId || "")) || "unknown",
+    callConfirmed: typeof row.callConfirmed === "boolean" ? row.callConfirmed : String(row.requestType || "").toLowerCase() === "mark"
   }));
 
   const mappedWeb = webRows.map((row) => {
@@ -428,6 +488,7 @@ const telegramWebhook = asyncHandler(async (req, res) => {
 module.exports = {
   manualAttendance,
   queueTaNotification,
+  confirmBotCallRequest,
   callStudent,
   confirmArrival,
   updateStatus,
@@ -437,6 +498,11 @@ module.exports = {
   getRecentActivity,
   telegramWebhook
 };
+
+
+
+
+
 
 
 

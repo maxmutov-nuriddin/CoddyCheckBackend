@@ -111,6 +111,7 @@ const callRequestScene = new WizardScene(
         time,
         status: "Kutilmoqda",
         requesterRole: workerRoleRaw,
+        callConfirmed: false,
         requestType
       });
 
@@ -153,3 +154,6 @@ const callRequestScene = new WizardScene(
 callRequestScene.hears("❌ Bekor qilish", (ctx) => cancelAndExit(ctx));
 
 module.exports = callRequestScene;
+
+
+

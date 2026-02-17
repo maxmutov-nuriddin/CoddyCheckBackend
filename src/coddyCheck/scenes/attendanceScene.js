@@ -116,7 +116,8 @@ const attendanceScene = new WizardScene(
         time,
         status: "Keldi",
         requesterRole,
-        requestType: "mark"
+        requestType: "mark",
+        callConfirmed: true
       });
 
       await ctx.reply(
@@ -163,3 +164,6 @@ attendanceScene.hears("❌ Bekor qilish", (ctx) => {
 });
 
 module.exports = attendanceScene;
+
+
+

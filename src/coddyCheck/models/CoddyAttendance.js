@@ -47,6 +47,14 @@ const coddyAttendanceSchema = new mongoose.Schema(
       enum: ["mentor", "ta", "mentor_ta", "unknown"],
       default: "unknown"
     },
+    callConfirmed: {
+      type: Boolean,
+      default: false
+    },
+    confirmedAt: {
+      type: Date,
+      default: null
+    },
     date: {
       type: String,
       required: true,
