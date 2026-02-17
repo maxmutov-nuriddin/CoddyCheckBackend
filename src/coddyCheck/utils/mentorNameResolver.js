@@ -106,7 +106,7 @@ function resolveMentorNameFromWorkers(rawName, workers = []) {
 }
 
 async function loadActiveStaffForMatching() {
-  return User.find({ isActive: true, role: { $in: STAFF_ROLES } }, { fullName: 1, role: 1 }).lean();
+  return User.find({ isActive: true, role: { $in: STAFF_ROLES } }, { fullName: 1, role: 1, telegramId: 1 }).lean();
 }
 
 async function resolveMentorDisplayName(rawName, workers) {
@@ -119,3 +119,4 @@ module.exports = {
   resolveMentorDisplayName,
   resolveMentorNameFromWorkers
 };
+

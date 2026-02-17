@@ -317,6 +317,12 @@ const getRecentActivity = asyncHandler(async (req, res) => {
 
   const q = String(search || "").trim().toLowerCase();
 
+  const roleByTelegramId = new Map(
+    staff
+      .filter((item) => item && item.telegramId)
+      .map((item) => [String(item.telegramId), String(item.role || "unknown").toLowerCase()])
+  );
+
   const mappedBot = botRows.map((row) => ({
     id: `bot-${row._id}`,
     date: row.date,
@@ -329,7 +335,7 @@ const getRecentActivity = asyncHandler(async (req, res) => {
     ta: row.teacherName,
     source: "bot",
     requestType: row.requestType || "mark",
-    requesterRole: row.requesterRole || "unknown"
+    requesterRole: row.requesterRole || roleByTelegramId.get(String(row.teacherId || "")) || "unknown"
   }));
 
   const mappedWeb = webRows.map((row) => {
@@ -431,6 +437,8 @@ module.exports = {
   getRecentActivity,
   telegramWebhook
 };
+
+
 
 
 
