@@ -1,6 +1,7 @@
 ﻿const { Scenes, Markup } = require("telegraf");
 const CoddyTeacher = require("../models/CoddyTeacher");
 const CoddyAttendance = require("../models/CoddyAttendance");
+const User = require("../../models/User");
 const { teacherMainKeyboard } = require("../keyboards");
 
 const { WizardScene } = Scenes;
@@ -43,6 +44,10 @@ const settingsScene = new WizardScene(
 
       await CoddyTeacher.findOneAndUpdate({ telegramId: userId }, { name: newName }, { upsert: true, new: true });
       await CoddyAttendance.updateMany({ teacherId: userId }, { teacherName: newName });
+      await User.updateMany(
+        { telegramId: String(userId), role: { $in: ["mentor", "ta", "mentor_ta"] } },
+        { fullName: newName }
+      );
 
       await ctx.reply(`✅ Ism yangilandi: ${newName}`, Markup.keyboard(teacherMainKeyboard).resize());
     } catch (error) {

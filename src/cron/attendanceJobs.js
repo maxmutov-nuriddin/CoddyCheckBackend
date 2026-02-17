@@ -37,7 +37,7 @@ async function getCalledAttendancesByDate(dateInput) {
 
 async function sendReminderToTAs({ dateInput, hourTag, includeButtons }) {
   const attendances = await getCalledAttendancesByDate(dateInput);
-  const tas = await User.find({ role: "ta", isActive: true, telegramId: { $ne: null } });
+  const tas = await User.find({ role: { $in: ["ta", "mentor_ta"] }, isActive: true, telegramId: { $ne: null } });
 
   if (tas.length === 0 || attendances.length === 0) {
     return;
@@ -73,7 +73,7 @@ async function sendScheduledTaNotifications() {
 
   for (const task of tasks) {
     const tas = await User.find({
-      role: "ta",
+      role: { $in: ["ta", "mentor_ta"] },
       isActive: true,
       telegramId: { $ne: null },
       $or: [{ specialization: { $in: [task.direction, "both"] } }, { specialization: { $exists: false } }]
@@ -148,3 +148,4 @@ function startAttendanceJobs() {
 }
 
 module.exports = startAttendanceJobs;
+

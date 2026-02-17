@@ -86,7 +86,7 @@ const attendanceScene = new WizardScene(
         return ctx.scene.leave();
       }
 
-      const teacherName = ctx.from.first_name || ctx.from.username || "Unknown";
+      const teacherName = ctx.state?.worker?.fullName || ctx.from.first_name || ctx.from.username || "Unknown";
 
       await CoddyAttendance.create({
         teacherId: ctx.from.id,
@@ -143,3 +143,4 @@ attendanceScene.hears("❌ Bekor qilish", (ctx) => {
 });
 
 module.exports = attendanceScene;
+

@@ -10,7 +10,7 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ["kurator", "ta", "mentor"],
+      enum: ["kurator", "ta", "mentor", "mentor_ta"],
       required: true
     },
     specialization: {
@@ -57,3 +57,4 @@ userSchema.methods.comparePassword = function comparePassword(rawPassword) {
 };
 
 module.exports = mongoose.model("User", userSchema);
+

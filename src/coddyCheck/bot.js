@@ -1,4 +1,5 @@
 ﻿const env = require("../config/env");
+const User = require("../models/User");
 const CoddyTeacher = require("./models/CoddyTeacher");
 const { teacherMainKeyboard, adminMainKeyboard } = require("./keyboards");
 
@@ -9,9 +10,35 @@ function isAdmin(ctx) {
   return env.coddyAdminIds.includes(Number(ctx.from?.id));
 }
 
-function userAllowed(ctx) {
-  if (!env.coddyAllowedIds.length) return true;
-  return env.coddyAllowedIds.includes(Number(ctx.from?.id));
+async function findBotWorkerByTelegramId(telegramId) {
+  const normalized = String(telegramId || "").trim();
+  if (!normalized) return null;
+
+  return User.findOne({
+    telegramId: normalized,
+    isActive: true,
+    role: { $in: ["mentor", "ta", "mentor_ta"] }
+  });
+}
+
+async function userAllowed(ctx) {
+  const telegramId = Number(ctx.from?.id);
+  if (!telegramId) return { allowed: false, worker: null };
+
+  if (isAdmin(ctx)) {
+    return { allowed: true, worker: null };
+  }
+
+  const worker = await findBotWorkerByTelegramId(telegramId);
+  if (worker) {
+    return { allowed: true, worker };
+  }
+
+  if (env.coddyAllowedIds.length) {
+    return { allowed: env.coddyAllowedIds.includes(telegramId), worker: null };
+  }
+
+  return { allowed: false, worker: null };
 }
 
 function getMainKeyboard(ctx) {
@@ -20,14 +47,15 @@ function getMainKeyboard(ctx) {
 
 async function handleStart(ctx) {
   const { id, first_name: firstName, username = "" } = ctx.from;
+  const displayName = ctx.state?.worker?.fullName || firstName || username || "Teacher";
 
   await CoddyTeacher.findOneAndUpdate(
     { telegramId: id },
-    { name: firstName || username || "Teacher", username },
+    { name: displayName, username },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 
-  return ctx.reply(`Xush kelibsiz, ${firstName || "ustoz"}!`, {
+  return ctx.reply(`Xush kelibsiz, ${displayName}!`, {
     reply_markup: {
       keyboard: getMainKeyboard(ctx),
       resize_keyboard: true
@@ -71,10 +99,12 @@ async function startCoddyCheckBot() {
   coddyBot.use(async (ctx, next) => {
     if (!ctx.from) return next();
 
-    if (!userAllowed(ctx)) {
-      return ctx.reply("Siz ushbu botdan foydalanish ro'yxatida emassiz.");
+    const { allowed, worker } = await userAllowed(ctx);
+    if (!allowed) {
+      return ctx.reply("Sizda botdan foydalanish huquqi yo'q.");
     }
 
+    ctx.state.worker = worker || null;
     return next();
   });
 

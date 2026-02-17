@@ -4,6 +4,7 @@ const morgan = require("morgan");
 const authRoutes = require("./routes/authRoutes");
 const studentRoutes = require("./routes/studentRoutes");
 const attendanceRoutes = require("./routes/attendanceRoutes");
+const workerRoutes = require("./routes/workerRoutes");
 const { handleCoddyWebhook, getCoddyBotStatus } = require("./coddyCheck/bot");
 const { errorHandler, notFoundHandler } = require("./middlewares/errorHandler");
 
@@ -26,6 +27,7 @@ app.post("/api/telegram/coddy", handleCoddyWebhook);
 app.use("/api/auth", authRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/attendance", attendanceRoutes);
+app.use("/api/workers", workerRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
