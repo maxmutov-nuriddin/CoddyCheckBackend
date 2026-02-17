@@ -2,12 +2,16 @@
 const { DateTime } = require("luxon");
 const env = require("../../config/env");
 const CoddyAttendance = require("../models/CoddyAttendance");
-const { teacherMainKeyboard } = require("../keyboards");
+const { getWorkerMainKeyboard } = require("../keyboards");
 const { resolveMentorDisplayName } = require("../utils/mentorNameResolver");
 
 const { WizardScene } = Scenes;
 
 const cancelKeyboard = Markup.keyboard([["❌ Bekor qilish"]]).resize();
+
+function mainKeyboard(ctx) {
+  return Markup.keyboard(getWorkerMainKeyboard(ctx.state?.worker?.role)).resize();
+}
 
 const attendanceScene = new WizardScene(
   "coddy_attendance_wizard",
@@ -17,7 +21,7 @@ const attendanceScene = new WizardScene(
   },
   (ctx) => {
     if (ctx.message?.text === "❌ Bekor qilish") {
-      ctx.reply("Bekor qilindi", Markup.keyboard(teacherMainKeyboard).resize());
+      ctx.reply("Bekor qilindi", mainKeyboard(ctx));
       return ctx.scene.leave();
     }
 
@@ -32,7 +36,7 @@ const attendanceScene = new WizardScene(
   },
   (ctx) => {
     if (ctx.message?.text === "❌ Bekor qilish") {
-      ctx.reply("Bekor qilindi", Markup.keyboard(teacherMainKeyboard).resize());
+      ctx.reply("Bekor qilindi", mainKeyboard(ctx));
       return ctx.scene.leave();
     }
 
@@ -47,7 +51,7 @@ const attendanceScene = new WizardScene(
   },
   async (ctx) => {
     if (ctx.message?.text === "❌ Bekor qilish") {
-      ctx.reply("Bekor qilindi", Markup.keyboard(teacherMainKeyboard).resize());
+      ctx.reply("Bekor qilindi", mainKeyboard(ctx));
       return ctx.scene.leave();
     }
 
@@ -73,7 +77,7 @@ const attendanceScene = new WizardScene(
   },
   async (ctx) => {
     if (ctx.message?.text === "❌ Bekor qilish") {
-      ctx.reply("Bekor qilindi", Markup.keyboard(teacherMainKeyboard).resize());
+      ctx.reply("Bekor qilindi", mainKeyboard(ctx));
       return ctx.scene.leave();
     }
 
@@ -94,7 +98,7 @@ const attendanceScene = new WizardScene(
       });
 
       if (existing) {
-        await ctx.reply(`❌ "${studentName}" bugun allaqachon belgilangan.`, Markup.keyboard(teacherMainKeyboard).resize());
+        await ctx.reply(`❌ "${studentName}" bugun allaqachon belgilangan.`, mainKeyboard(ctx));
         return ctx.scene.leave();
       }
 
@@ -108,7 +112,9 @@ const attendanceScene = new WizardScene(
         mainTeacher,
         topic,
         date,
-        time
+        time,
+        status: "Keldi",
+        requestType: "mark"
       });
 
       await ctx.reply(
@@ -120,7 +126,7 @@ const attendanceScene = new WizardScene(
           `Mavzu: ${topic}`,
           `Vaqt: ${date} ${time}`
         ].join("\n"),
-        Markup.keyboard(teacherMainKeyboard).resize()
+        mainKeyboard(ctx)
       );
 
       const notifyText = [
@@ -142,7 +148,7 @@ const attendanceScene = new WizardScene(
       }
     } catch (error) {
       console.error("attendance scene save error:", error);
-      await ctx.reply("Saqlashda xatolik yuz berdi.", Markup.keyboard(teacherMainKeyboard).resize());
+      await ctx.reply("Saqlashda xatolik yuz berdi.", mainKeyboard(ctx));
     }
 
     return ctx.scene.leave();
@@ -150,9 +156,8 @@ const attendanceScene = new WizardScene(
 );
 
 attendanceScene.hears("❌ Bekor qilish", (ctx) => {
-  ctx.reply("Bekor qilindi", Markup.keyboard(teacherMainKeyboard).resize());
+  ctx.reply("Bekor qilindi", mainKeyboard(ctx));
   return ctx.scene.leave();
 });
 
 module.exports = attendanceScene;
-

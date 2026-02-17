@@ -1,13 +1,18 @@
 ﻿const env = require("../config/env");
 const User = require("../models/User");
 const CoddyTeacher = require("./models/CoddyTeacher");
-const { teacherMainKeyboard, adminMainKeyboard } = require("./keyboards");
+const { getWorkerMainKeyboard, adminMainKeyboard } = require("./keyboards");
 
 let coddyBot = null;
 let coddyMode = "disabled";
 
 function isAdmin(ctx) {
   return env.coddyAdminIds.includes(Number(ctx.from?.id));
+}
+
+function canUseCallRequest(ctx) {
+  const role = String(ctx.state?.worker?.role || "").toLowerCase();
+  return role === "mentor" || role === "mentor_ta";
 }
 
 async function findBotWorkerByTelegramId(telegramId) {
@@ -42,7 +47,11 @@ async function userAllowed(ctx) {
 }
 
 function getMainKeyboard(ctx) {
-  return isAdmin(ctx) ? adminMainKeyboard : teacherMainKeyboard;
+  if (isAdmin(ctx)) {
+    return adminMainKeyboard;
+  }
+
+  return getWorkerMainKeyboard(ctx.state?.worker?.role);
 }
 
 async function handleStart(ctx) {
@@ -86,6 +95,7 @@ async function startCoddyCheckBot() {
   const startCoddyDailyReport = require("./jobs/dailyReport");
 
   const attendanceScene = require("./scenes/attendanceScene");
+  const callRequestScene = require("./scenes/callRequestScene");
   const reportScene = require("./scenes/reportScene");
   const settingsScene = require("./scenes/settingsScene");
   const searchScene = require("./scenes/searchScene");
@@ -93,7 +103,14 @@ async function startCoddyCheckBot() {
 
   coddyBot = new Telegraf(env.coddyBotToken);
 
-  const stage = new Scenes.Stage([attendanceScene, reportScene, settingsScene, searchScene, editScene]);
+  const stage = new Scenes.Stage([
+    attendanceScene,
+    callRequestScene,
+    reportScene,
+    settingsScene,
+    searchScene,
+    editScene
+  ]);
   coddyBot.use(session());
 
   coddyBot.use(async (ctx, next) => {
@@ -112,13 +129,20 @@ async function startCoddyCheckBot() {
 
   coddyBot.start(handleStart);
 
+  coddyBot.hears("📣 O'quvchi chaqirish", (ctx) => {
+    if (!canUseCallRequest(ctx)) {
+      return ctx.reply("Bu tugma faqat Mentor va Mentor+TA uchun.");
+    }
+    return ctx.scene.enter("coddy_call_request_wizard");
+  });
+
   coddyBot.hears("➕ O'quvchi belgilash", (ctx) => ctx.scene.enter("coddy_attendance_wizard"));
   coddyBot.hears("📓 Mening yozuvlarim", teacherController.listMyMarks);
   coddyBot.hears("⚙️ Sozlamalar", (ctx) => ctx.scene.enter("coddy_settings_scene"));
   coddyBot.hears("ℹ️ Yordam", (ctx) =>
     ctx.reply(
-      "Yangi yozuv uchun '➕ O'quvchi belgilash' ni bosing.\n" +
-        "Hisobot va qidiruv adminlar uchun ochiq."
+      "Mentor uchun: '📣 O'quvchi chaqirish' tugmasi mavjud.\n" +
+        "Qo'shimcha yozuv uchun: '➕ O'quvchi belgilash'."
     )
   );
 
