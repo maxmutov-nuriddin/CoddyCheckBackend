@@ -12,7 +12,7 @@ function isAdmin(ctx) {
 
 function canUseCallRequest(ctx) {
   const role = String(ctx.state?.worker?.role || "").toLowerCase();
-  return role === "mentor" || role === "mentor_ta";
+  return role === "mentor" || role === "mentor_ta" || role === "ta";
 }
 
 async function findBotWorkerByTelegramId(telegramId) {
@@ -114,20 +114,36 @@ async function startCoddyCheckBot() {
   coddyBot.use(session());
 
   coddyBot.use(async (ctx, next) => {
-    if (!ctx.from) return next();
+    try {
+      if (!ctx.from) return next();
 
-    const { allowed, worker } = await userAllowed(ctx);
-    if (!allowed) {
-      return ctx.reply("Sizda botdan foydalanish huquqi yo'q.");
+      const { allowed, worker } = await userAllowed(ctx);
+      if (!allowed) {
+        return ctx.reply("Sizda botdan foydalanish huquqi yo'q.");
+      }
+
+      ctx.state.worker = worker || null;
+      return next();
+    } catch (error) {
+      console.error("Bot middleware error:", error);
+      return ctx.reply("Botda texnik xatolik yuz berdi.").catch(() => { });
     }
-
-    ctx.state.worker = worker || null;
-    return next();
   });
 
   coddyBot.use(stage.middleware());
 
-  coddyBot.start(handleStart);
+  coddyBot.catch((err, ctx) => {
+    console.error(`Telegraf error for update ${ctx.update?.update_id}:`, err);
+  });
+
+  coddyBot.start(async (ctx) => {
+    try {
+      await handleStart(ctx);
+    } catch (error) {
+      console.error("handleStart error:", error);
+      await ctx.reply("Start buyrug'ida xatolik yuz berdi.").catch(() => { });
+    }
+  });
 
   coddyBot.hears("📣 O'quvchi chaqirish", (ctx) => {
     if (!canUseCallRequest(ctx)) {
@@ -136,13 +152,13 @@ async function startCoddyCheckBot() {
     return ctx.scene.enter("coddy_call_request_wizard");
   });
 
-  coddyBot.hears("➕ O'quvchi belgilash", (ctx) => ctx.scene.enter("coddy_attendance_wizard"));
+  coddyBot.hears("➕ O'quvchi qo'shish", (ctx) => ctx.scene.enter("coddy_attendance_wizard"));
   coddyBot.hears("📓 Mening yozuvlarim", teacherController.listMyMarks);
   coddyBot.hears("⚙️ Sozlamalar", (ctx) => ctx.scene.enter("coddy_settings_scene"));
   coddyBot.hears("ℹ️ Yordam", (ctx) =>
     ctx.reply(
       "Mentor uchun: '📣 O'quvchi chaqirish' tugmasi mavjud.\n" +
-      "Qo'shimcha yozuv uchun: '➕ O'quvchi belgilash'."
+      "Qo'shimcha yozuv uchun: '➕ O'quvchi qo'shish'."
     )
   );
 
