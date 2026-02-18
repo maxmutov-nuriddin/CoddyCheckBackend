@@ -100,20 +100,69 @@ const manualAttendance = asyncHandler(async (req, res) => {
   }
 
   const normalizedDate = normalizeDateOnly(date);
+  const dayStr = formatYMD(normalizedDate);
 
-  const attendance = await Attendance.create({
+  // 1. Check if an Attendance record exists for today
+  let attendance = await Attendance.findOne({ studentId, date: normalizedDate });
+  if (attendance) {
+    if (attendance.attendanceStatus) {
+      // It has a final mark (Keldi/Kelmadi), block.
+      throw new ApiError(400, `Ushbu o'quvchi bugun uchun allaqachon belgilangan (${attendance.attendanceStatus}).`);
+    }
+  }
+
+  // 2. Reconciliation: Try to find a pending bot call request for this student today
+  const botCallRequests = await CoddyAttendance.find({
+    studentName: student.fullName,
+    date: dayStr,
+    requestType: { $in: ["call_extra", "keep"] },
+    status: "Kutilmoqda"
+  });
+
+  for (const botReq of botCallRequests) {
+    botReq.status = attendanceStatus === "keldi" ? "Keldi" : "Kelmadi";
+    await botReq.save();
+
+    // Notify mentor if they arrived
+    if (attendanceStatus === "keldi") {
+      const bot = getBotInstance();
+      if (bot && botReq.teacherId) {
+        bot.telegram.sendMessage(
+          botReq.teacherId,
+          `✅ **O'quvchingiz keldi!**\n\nIsm: ${student.fullName}\nGuruh: ${student.groupName || botReq.studentGroup}\nSana: ${dayStr}`,
+          { parse_mode: "Markdown" }
+        ).catch(err => console.error("Telegram notify error:", err.message));
+      }
+    }
+  }
+
+  if (attendance) {
+    // Update existing pending call record to final status
+    attendance.attendanceStatus = attendanceStatus;
+    attendance.comment = comment || attendance.comment;
+    attendance.taId = req.user._id;
+    attendance.callStatus = "chaqirilgan"; // If it existed but was null, it was a call
+    await attendance.save();
+    return ok(res, attendance, "Attendance reconciled with existing call");
+  }
+
+  // Determine if it was called (reconciling with bot search)
+  const wasCalled = botCallRequests.length > 0;
+
+  // 3. Create fresh attendance record
+  attendance = await Attendance.create({
     studentId,
     groupId: student.groupId,
     taId: req.user._id,
     date: normalizedDate,
     time: null,
-    callStatus: "chaqirilmagan",
+    callStatus: wasCalled ? "chaqirilgan" : "chaqirilmagan",
     attendanceStatus,
     comment,
-    botIntegration: false
+    botIntegration: wasCalled
   });
 
-  return created(res, attendance, "Manual attendance created");
+  return created(res, attendance, wasCalled ? "Manual arrival reconciled" : "Manual attendance created");
 });
 
 const queueTaNotification = asyncHandler(async (req, res) => {
@@ -223,6 +272,33 @@ const callStudent = asyncHandler(async (req, res) => {
   }
 
   const normalizedDate = normalizeDateOnly(date);
+  const dayStr = formatYMD(normalizedDate);
+
+  // Duplicate check Web: Verify if student already has a record for this date
+  const existingWeb = await Attendance.findOne({ studentId, date: normalizedDate });
+  if (existingWeb) {
+    if (existingWeb.attendanceStatus) {
+      // It has a final mark (Keldi/Kelmadi), block.
+      throw new ApiError(400, `Bu o'quvchi bugun uchun allaqachon belgilangan (${existingWeb.attendanceStatus}).`);
+    }
+    // It's just a call record, allow updating it
+    existingWeb.time = buildDateTime(normalizedDate, time);
+    existingWeb.comment = comment || existingWeb.comment;
+    existingWeb.mentorId = req.user._id;
+    await existingWeb.save();
+    return ok(res, existingWeb, "Attendance call updated");
+  }
+
+  // Duplicate check Bot: Verify if student is already in bot activity for this date
+  const existingBot = await CoddyAttendance.findOne({
+    studentName: student.fullName,
+    date: dayStr,
+    requestType: "mark"
+  });
+  if (existingBot) {
+    throw new ApiError(400, `Bu o'quvchi bot orqali allaqachon belgilangan.`);
+  }
+
   const parsedTime = buildDateTime(normalizedDate, time);
 
   const attendance = await Attendance.create({
