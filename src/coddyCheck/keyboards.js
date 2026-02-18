@@ -1,12 +1,16 @@
 ﻿const mentorMainKeyboard = [
   ["📣 O'quvchi chaqirish", "📓 Mening yozuvlarim"],
-  ["➕ O'quvchi qo'shish", "⚙️ Sozlamalar"],
-  ["ℹ️ Yordam"]
+  ["⚙️ Sozlamalar", "ℹ️ Yordam"]
 ];
 
 const taMainKeyboard = [
-  ["📣 O'quvchi chaqirish", "📓 Mening yozuvlarim"],
-  ["➕ O'quvchi qo'shish", "⚙️ Sozlamalar"],
+  ["➕ O'quvchi qo'shish", "📓 Mening yozuvlarim"],
+  ["⚙️ Sozlamalar", "ℹ️ Yordam"]
+];
+
+const mentorTaMainKeyboard = [
+  ["📣 O'quvchi chaqirish", "➕ O'quvchi qo'shish"],
+  ["📓 Mening yozuvlarim", "⚙️ Sozlamalar"],
   ["ℹ️ Yordam"]
 ];
 
@@ -17,7 +21,11 @@ const adminMainKeyboard = [["📊 Hisobot", "🔍 Qidiruv"]];
 function getWorkerMainKeyboard(role) {
   const normalizedRole = String(role || "").toLowerCase();
 
-  if (normalizedRole === "mentor" || normalizedRole === "mentor_ta") {
+  if (normalizedRole === "mentor_ta") {
+    return mentorTaMainKeyboard;
+  }
+
+  if (normalizedRole === "mentor") {
     return mentorMainKeyboard;
   }
 

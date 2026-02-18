@@ -12,7 +12,7 @@ function isAdmin(ctx) {
 
 function canUseCallRequest(ctx) {
   const role = String(ctx.state?.worker?.role || "").toLowerCase();
-  return role === "mentor" || role === "mentor_ta" || role === "ta";
+  return role === "mentor" || role === "mentor_ta";
 }
 
 async function findBotWorkerByTelegramId(telegramId) {
@@ -158,7 +158,7 @@ async function startCoddyCheckBot() {
   coddyBot.hears("ℹ️ Yordam", (ctx) =>
     ctx.reply(
       "Mentor uchun: '📣 O'quvchi chaqirish' tugmasi mavjud.\n" +
-      "Qo'shimcha yozuv uchun: '➕ O'quvchi qo'shish'."
+      "Assistent (TA) uchun: '➕ O'quvchi qo'shish' tugmasi mavjud."
     )
   );
 
