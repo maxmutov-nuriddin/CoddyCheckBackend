@@ -57,12 +57,12 @@ const coddyAttendanceSchema = new mongoose.Schema(
     },
     date: {
       type: String,
-      required: true,
+      required: false,
       index: true
     },
     time: {
       type: String,
-      required: true
+      required: false
     }
   },
   { timestamps: true }

@@ -109,8 +109,6 @@ const callRequestScene = new WizardScene(
         studentGroup: normalizedGroup,
         mainTeacher: workerName,
         topic: `So'rov: ${requestLabel}`,
-        date,
-        time,
         status: "Kutilmoqda",
         requesterRole: workerRoleRaw,
         callConfirmed: false,

@@ -9,6 +9,7 @@ const { getDayBounds, formatYMD } = require("../utils/date");
 const { updateAttendanceStatus } = require("../services/attendanceService");
 const env = require("../config/env");
 const { loadActiveStaffForMatching, resolveMentorNameFromWorkers } = require("../coddyCheck/utils/mentorNameResolver");
+const { getBotInstance } = require("../coddyCheck/bot");
 
 function normalizeDateOnly(dateInput) {
   const date = new Date(dateInput);
@@ -20,7 +21,7 @@ function normalizeDateOnly(dateInput) {
 }
 
 function buildDateTime(dateInput, timeInput) {
-  if (!timeInput) {
+  if (!timeInput || timeInput === "Kun davomida") {
     return null;
   }
 
@@ -30,7 +31,7 @@ function buildDateTime(dateInput, timeInput) {
   const minutes = Number(minuteStr);
 
   if (Number.isNaN(hours) || Number.isNaN(minutes)) {
-    throw new ApiError(400, "Invalid time format, expected HH:mm");
+    throw new ApiError(400, "Invalid time format, expected HH:mm or 'Kun davomida'");
   }
 
   date.setHours(hours, minutes, 0, 0);
@@ -51,8 +52,12 @@ function normalizeOptionalTime(input) {
   const value = String(input || "").trim();
   if (!value) return "";
 
+  if (value === "Kun davomida") {
+    return value;
+  }
+
   if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(value)) {
-    throw new ApiError(400, "time must be HH:mm format");
+    throw new ApiError(400, "time must be HH:mm format or 'Kun davomida'");
   }
 
   return value;
@@ -178,6 +183,22 @@ const confirmBotCallRequest = asyncHandler(async (req, res) => {
   }
 
   await request.save();
+
+  // Notify the requester (mentor/TA) via Telegram
+  const bot = getBotInstance();
+  if (bot && request.teacherId) {
+    const message = [
+      `🔔 **O'quvchingiz chaqirildi**`,
+      `O'quvchi: ${request.studentName}`,
+      `Guruh: ${request.studentGroup}`,
+      `Sana: ${request.date}`,
+      `Vaqt: ${request.time || "belgilanmagan"}`
+    ].join("\n");
+
+    bot.telegram.sendMessage(request.teacherId, message, { parse_mode: "Markdown" }).catch((err) => {
+      console.error(`Failed to notify requester ${request.teacherId}:`, err.message);
+    });
+  }
 
   return ok(
     res,
@@ -359,12 +380,14 @@ const getRecentActivity = asyncHandler(async (req, res) => {
 
   if (date) {
     const { start, end } = getDayBounds(date);
-    coddyQuery.date = formatYMD(start);
+    const dayStr = formatYMD(start);
+    // Bot so'rovlari: yoki berilgan sanaga mos keladiganlar, yoki hali tasdiqlanmaganlar (hammasi)
+    coddyQuery.$or = [{ date: dayStr }, { callConfirmed: false }];
     attendanceQuery.date = { $gte: start, $lte: end };
   }
 
   const [botRows, webRows, staff] = await Promise.all([
-    CoddyAttendance.find(coddyQuery).sort({ date: -1, time: -1, createdAt: -1 }),
+    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }),
     Attendance.find(attendanceQuery)
       .populate("studentId", "fullName")
       .populate("groupId", "name")
@@ -384,8 +407,8 @@ const getRecentActivity = asyncHandler(async (req, res) => {
 
   const mappedBot = botRows.map((row) => ({
     id: `bot-${row._id}`,
-    date: row.date,
-    time: row.time,
+    date: row.date || "-",
+    time: row.time || "-",
     mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
     group: row.studentGroup,
     student: row.studentName,

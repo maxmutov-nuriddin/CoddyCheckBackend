@@ -238,9 +238,14 @@ function getCoddyBotStatus() {
   };
 }
 
+function getBotInstance() {
+  return coddyBot;
+}
+
 module.exports = {
   startCoddyCheckBot,
   stopCoddyCheckBot,
   handleCoddyWebhook,
-  getCoddyBotStatus
+  getCoddyBotStatus,
+  getBotInstance
 };
