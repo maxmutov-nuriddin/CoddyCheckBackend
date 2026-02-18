@@ -24,13 +24,15 @@ const getStudents = asyncHandler(async (req, res) => {
 const createStudent = asyncHandler(async (req, res) => {
   const { fullName, groupId, frozenStatus = null, comment = "", profileUrl = "" } = req.body;
 
-  if (!fullName || !groupId) {
-    throw new ApiError(400, "fullName and groupId are required");
+  if (!fullName) {
+    throw new ApiError(400, "fullName is required");
   }
 
-  const group = await Group.findById(groupId);
-  if (!group) {
-    throw new ApiError(404, "Group not found");
+  if (groupId) {
+    const group = await Group.findById(groupId);
+    if (!group) {
+      throw new ApiError(404, "Group not found");
+    }
   }
 
   const student = await Student.create({
@@ -90,7 +92,8 @@ const getFrozenStudents = asyncHandler(async (req, res) => {
   const { status } = req.query;
 
   const filter = {
-    frozenStatus: status || { $in: ["qarzdor", "qaytadi", "muzlatilgan"] }
+    frozenStatus: status || { $in: ["qarzdor", "qaytadi", "muzlatilgan"] },
+    isActive: true
   };
 
   const students = await Student.find(filter)

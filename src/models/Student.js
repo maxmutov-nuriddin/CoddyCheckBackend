@@ -10,7 +10,7 @@ const studentSchema = new mongoose.Schema(
     groupId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Group",
-      required: true
+      required: false
     },
     frozenStatus: {
       type: String,
