@@ -597,6 +597,143 @@ const deleteActivity = asyncHandler(async (req, res) => {
   return ok(res, null, "Record deleted permanently");
 });
 
+const getAllActivity = asyncHandler(async (req, res) => {
+  const { date, status = "Barchasi", search = "", sort = "date-desc" } = req.query;
+
+  // Only "mark" requestType from bot — excludes oquvchi_chaqirish (call_extra, keep)
+  const coddyQuery = { requestType: "mark" };
+  const attendanceQuery = {};
+
+  if (date) {
+    const { start, end } = getDayBounds(date);
+    const dayStr = formatYMD(start);
+    coddyQuery.date = dayStr;
+    attendanceQuery.date = { $gte: start, $lte: end };
+  }
+
+  const [botRows, webRows, staff] = await Promise.all([
+    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }),
+    Attendance.find(attendanceQuery)
+      .populate("studentId", "fullName")
+      .populate("groupId", "name")
+      .populate("mentorId", "fullName")
+      .populate("taId", "fullName")
+      .sort({ date: -1, time: -1, createdAt: -1 }),
+    loadActiveStaffForMatching()
+  ]);
+
+  const q = String(search || "").trim().toLowerCase();
+
+  const mappedBot = botRows.map((row) => ({
+    id: `bot-${row._id}`,
+    date: row.date || "-",
+    time: row.time || "-",
+    mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
+    group: row.studentGroup,
+    student: row.studentName,
+    status: row.status || "Keldi",
+    comment: row.topic,
+    ta: row.teacherName,
+    source: "bot",
+    requestType: row.requestType || "mark",
+    requesterRole: row.requesterRole || "unknown",
+    callConfirmed: true
+  }));
+
+  const mappedWeb = webRows.map((row) => {
+    const statusLabel =
+      row.attendanceStatus === "keldi"
+        ? "Keldi"
+        : row.attendanceStatus === "kelmadi"
+          ? "Kelmadi"
+          : "Kutilmoqda";
+
+    const timeLabel = row.time ? new Date(row.time).toTimeString().slice(0, 5) : "--:--";
+
+    return {
+      id: `web-${row._id}`,
+      date: formatYMD(row.date),
+      time: timeLabel,
+      mentor: row.mentorId?.fullName || "-",
+      group: row.groupId?.name || "-",
+      student: row.studentId?.fullName || "Deleted student",
+      status: statusLabel,
+      comment: row.comment || "",
+      ta: row.taId?.fullName || "-",
+      source: "web",
+      callStatus: row.callStatus || "chaqirilmagan",
+      requestType: "web_attendance",
+      requesterRole: "web"
+    };
+  });
+
+  let mapped = [...mappedWeb, ...mappedBot].filter((row) => {
+    if (!q) return true;
+    const haystack = [row.student, row.group, row.mentor, row.ta, row.comment, row.status]
+      .map((part) => String(part || "").toLowerCase())
+      .join(" ");
+    return haystack.includes(q);
+  });
+
+  if (status !== "Barchasi") {
+    mapped = mapped.filter((row) => row.status === status);
+  }
+
+  if (sort === "date-asc") {
+    mapped.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+  } else if (sort === "student-asc") {
+    mapped.sort((a, b) => String(a.student).localeCompare(String(b.student)));
+  } else if (sort === "student-desc") {
+    mapped.sort((a, b) => String(b.student).localeCompare(String(a.student)));
+  } else {
+    mapped.sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`));
+  }
+
+  return ok(res, mapped, "All activity list");
+});
+
+const getBotCalls = asyncHandler(async (req, res) => {
+  const { sort = "date-desc" } = req.query;
+
+  // Only oquvchi_chaqirish records (call_extra, keep) — NOT shown in So'nggi faollik
+  const coddyQuery = { requestType: { $in: ["call_extra", "keep"] } };
+
+  const [botRows, staff] = await Promise.all([
+    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }),
+    loadActiveStaffForMatching()
+  ]);
+
+  const roleByTelegramId = new Map(
+    staff
+      .filter((item) => item && item.telegramId)
+      .map((item) => [String(item.telegramId), String(item.role || "unknown").toLowerCase()])
+  );
+
+  let mapped = botRows.map((row) => ({
+    id: `bot-${row._id}`,
+    date: row.date || "-",
+    time: row.time || "-",
+    mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
+    group: row.studentGroup,
+    student: row.studentName,
+    status: row.status || "Kutilmoqda",
+    comment: row.topic,
+    ta: row.teacherName,
+    source: "bot",
+    requestType: row.requestType,
+    requesterRole: row.requesterRole || roleByTelegramId.get(String(row.teacherId || "")) || "unknown",
+    callConfirmed: typeof row.callConfirmed === "boolean" ? row.callConfirmed : false
+  }));
+
+  if (sort === "date-asc") {
+    mapped.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+  } else {
+    mapped.sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`));
+  }
+
+  return ok(res, mapped, "Bot calls list");
+});
+
 module.exports = {
   manualAttendance,
   queueTaNotification,
@@ -609,7 +746,9 @@ module.exports = {
   getDailyReport,
   getRecentActivity,
   telegramWebhook,
-  deleteActivity
+  deleteActivity,
+  getAllActivity,
+  getBotCalls
 };
 
 

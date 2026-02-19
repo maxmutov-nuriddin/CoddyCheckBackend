@@ -70,4 +70,11 @@ const coddyAttendanceSchema = new mongoose.Schema(
 
 coddyAttendanceSchema.index({ teacherId: 1, date: 1 });
 
+// Unique constraint: one student can only be added once per day via oquvchi_qoshish (mark)
+// Does NOT affect oquvchi_chaqirish (call_extra, keep) records
+coddyAttendanceSchema.index(
+  { studentName: 1, date: 1 },
+  { unique: true, partialFilterExpression: { requestType: "mark" } }
+);
+
 module.exports = mongoose.model("CoddyAttendance", coddyAttendanceSchema);

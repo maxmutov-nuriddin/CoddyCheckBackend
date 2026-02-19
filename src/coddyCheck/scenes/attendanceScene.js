@@ -93,12 +93,14 @@ const attendanceScene = new WizardScene(
     const time = now.toFormat("HH:mm");
 
     try {
-      const existing = await CoddyAttendance.findOne({
+      // Only check mark records — call_extra/keep records are NOT counted as added students
+      const existingMark = await CoddyAttendance.findOne({
         studentName: { $regex: new RegExp(`^${studentName}$`, "i") },
-        date
+        date,
+        requestType: "mark"
       });
 
-      if (existing) {
+      if (existingMark) {
         await ctx.reply(`❌ "${studentName}" bugun allaqachon belgilangan.`, mainKeyboard(ctx));
         return ctx.scene.leave();
       }
@@ -106,48 +108,103 @@ const attendanceScene = new WizardScene(
       const teacherName = ctx.state?.worker?.fullName || ctx.from.first_name || ctx.from.username || "Unknown";
       const requesterRole = String(ctx.state?.worker?.role || "unknown").toLowerCase();
 
-      await CoddyAttendance.create({
-        teacherId: ctx.from.id,
-        teacherName,
-        studentName,
-        studentGroup,
-        mainTeacher,
-        topic,
-        date,
-        time,
-        status: "Keldi",
-        requesterRole,
-        requestType: "mark",
-        callConfirmed: true
+      // Check if there is a pending call request for this student today (Kutilmoqda)
+      // Unconfirmed records may not have `date` set, so also match by createdAt
+      const todayStart = now.startOf("day").toJSDate();
+      const todayEnd = now.endOf("day").toJSDate();
+      const pendingCall = await CoddyAttendance.findOne({
+        studentName: { $regex: new RegExp(`^${studentName}$`, "i") },
+        requestType: { $in: ["call_extra", "keep"] },
+        status: "Kutilmoqda",
+        $or: [
+          { date },
+          { createdAt: { $gte: todayStart, $lte: todayEnd } }
+        ]
       });
 
-      await ctx.reply(
-        [
-          "✅ Yozuv saqlandi:",
+      if (pendingCall) {
+        // Resolve: student arrived after being called — update the call record to Keldi
+        pendingCall.status = "Keldi";
+        if (!pendingCall.date) {
+          pendingCall.date = date;
+          pendingCall.time = time;
+        }
+        await pendingCall.save();
+
+        await ctx.reply(
+          [
+            "✅ Chaqirilgan o'quvchi keldi:",
+            `O'quvchi: ${studentName}`,
+            `Guruh: ${studentGroup}`,
+            `Asosiy ustoz: ${mainTeacher}`,
+            `Mavzu: ${topic}`,
+            `Vaqt: ${date} ${time}`
+          ].join("\n"),
+          mainKeyboard(ctx)
+        );
+
+        const notifyText = [
+          "✅ Chaqirilgan o'quvchi keldi",
+          `Support: ${teacherName}`,
           `O'quvchi: ${studentName}`,
           `Guruh: ${studentGroup}`,
           `Asosiy ustoz: ${mainTeacher}`,
           `Mavzu: ${topic}`,
-          `Vaqt: ${date} ${time}`
-        ].join("\n"),
-        mainKeyboard(ctx)
-      );
+          `Sana: ${date} ${time}`
+        ].join("\n");
 
-      const notifyText = [
-        "📌 Yangi bot yozuv",
-        `Support: ${teacherName}`,
-        `O'quvchi: ${studentName}`,
-        `Guruh: ${studentGroup}`,
-        `Asosiy ustoz: ${mainTeacher}`,
-        `Mavzu: ${topic}`,
-        `Sana: ${date} ${time}`
-      ].join("\n");
+        for (const adminId of env.coddyAdminIds) {
+          try {
+            await ctx.telegram.sendMessage(adminId, notifyText);
+          } catch (error) {
+            console.error(`Failed to notify admin ${adminId}:`, error.message);
+          }
+        }
+      } else {
+        // No pending call — normal oquvchi_qoshish: create a new mark record
+        await CoddyAttendance.create({
+          teacherId: ctx.from.id,
+          teacherName,
+          studentName,
+          studentGroup,
+          mainTeacher,
+          topic,
+          date,
+          time,
+          status: "Keldi",
+          requesterRole,
+          requestType: "mark",
+          callConfirmed: true
+        });
 
-      for (const adminId of env.coddyAdminIds) {
-        try {
-          await ctx.telegram.sendMessage(adminId, notifyText);
-        } catch (error) {
-          console.error(`Failed to notify admin ${adminId}:`, error.message);
+        await ctx.reply(
+          [
+            "✅ Yozuv saqlandi:",
+            `O'quvchi: ${studentName}`,
+            `Guruh: ${studentGroup}`,
+            `Asosiy ustoz: ${mainTeacher}`,
+            `Mavzu: ${topic}`,
+            `Vaqt: ${date} ${time}`
+          ].join("\n"),
+          mainKeyboard(ctx)
+        );
+
+        const notifyText = [
+          "📌 Yangi bot yozuv",
+          `Support: ${teacherName}`,
+          `O'quvchi: ${studentName}`,
+          `Guruh: ${studentGroup}`,
+          `Asosiy ustoz: ${mainTeacher}`,
+          `Mavzu: ${topic}`,
+          `Sana: ${date} ${time}`
+        ].join("\n");
+
+        for (const adminId of env.coddyAdminIds) {
+          try {
+            await ctx.telegram.sendMessage(adminId, notifyText);
+          } catch (error) {
+            console.error(`Failed to notify admin ${adminId}:`, error.message);
+          }
         }
       }
     } catch (error) {
