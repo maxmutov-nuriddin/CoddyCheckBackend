@@ -131,6 +131,22 @@ const attendanceScene = new WizardScene(
         }
         await pendingCall.save();
 
+        // Also create a mark record so this arrival appears in So'nggi faollik (barcha)
+        await CoddyAttendance.create({
+          teacherId: ctx.from.id,
+          teacherName,
+          studentName,
+          studentGroup,
+          mainTeacher,
+          topic,
+          date,
+          time,
+          status: "Keldi",
+          requesterRole,
+          requestType: "mark",
+          callConfirmed: true
+        });
+
         await ctx.reply(
           [
             "✅ Chaqirilgan o'quvchi keldi:",
@@ -142,6 +158,23 @@ const attendanceScene = new WizardScene(
           ].join("\n"),
           mainKeyboard(ctx)
         );
+
+        // Notify the teacher who initiated the call request
+        if (pendingCall.teacherId && pendingCall.teacherId !== ctx.from.id) {
+          try {
+            await ctx.telegram.sendMessage(
+              pendingCall.teacherId,
+              [
+                "✅ O'quvchingiz keldi!",
+                `O'quvchi: ${studentName}`,
+                `Guruh: ${pendingCall.studentGroup || studentGroup}`,
+                `Sana: ${date} ${time}`
+              ].join("\n")
+            );
+          } catch (error) {
+            console.error(`Failed to notify call requester ${pendingCall.teacherId}:`, error.message);
+          }
+        }
 
         const notifyText = [
           "✅ Chaqirilgan o'quvchi keldi",
