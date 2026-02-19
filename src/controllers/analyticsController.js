@@ -237,7 +237,6 @@ const getAnalytics = asyncHandler(async (req, res) => {
         const existing = trendMap.get(key);
         existing.invited += r.invited;
         existing.attended += r.attended;
-        existing.missed += r.invited - r.attended;
       }
     });
     trendBotAgg.forEach((r) => {
@@ -246,14 +245,13 @@ const getAnalytics = asyncHandler(async (req, res) => {
         const existing = trendMap.get(key);
         existing.invited += r.invited;
         existing.attended += r.attended;
-        existing.missed += r.invited - r.attended;
       }
     });
 
     const trend = Array.from(trendMap.values()).map((t) => ({
       month: t.name,
       attended: t.attended,
-      missed: t.missed,
+      missed: Math.max(0, t.invited - t.attended),
       pct: t.invited > 0 ? Math.min(Math.round((t.attended / t.invited) * 100), 100) : 0
     }));
 
