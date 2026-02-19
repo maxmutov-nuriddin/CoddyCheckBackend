@@ -448,6 +448,74 @@ const getDailyReport = asyncHandler(async (req, res) => {
   });
 });
 
+const getResults = asyncHandler(async (req, res) => {
+  const { dateFrom, dateTo, groupBy = "day" } = req.query;
+
+  const start = dateFrom ? new Date(dateFrom) : new Date();
+  const end = dateTo ? new Date(dateTo) : new Date();
+  start.setHours(0, 0, 0, 0);
+  end.setHours(23, 59, 59, 999);
+
+  const filter = {
+    date: { $gte: start, $lte: end },
+    callStatus: "chaqirilgan"
+  };
+
+  const attendanceRows = await Attendance.find(filter)
+    .populate("studentId", "fullName")
+    .populate("groupId", "name")
+    .sort({ date: 1, time: 1 });
+
+  const botMatch = {
+    date: { $gte: formatYMD(start), $lte: formatYMD(end) },
+    requestType: "mark"
+  };
+  const botRows = await CoddyAttendance.find(botMatch).sort({ date: 1, time: 1 });
+
+  // Merge rows for summary
+  const allRows = [
+    ...attendanceRows.map(r => ({
+      date: formatYMD(r.date),
+      status: r.attendanceStatus === "keldi" ? "Keldi" : r.attendanceStatus === "kelmadi" ? "Kelmadi" : "Kutilmoqda"
+    })),
+    ...botRows.map(r => ({
+      date: r.date,
+      status: r.status === "Keldi" ? "Keldi" : r.status === "Kelmadi" ? "Kelmadi" : "Kutilmoqda"
+    }))
+  ];
+
+  const resultsMap = new Map();
+
+  allRows.forEach(row => {
+    let groupKey = row.date;
+    if (groupBy === "week") {
+      const d = new Date(row.date);
+      const first = d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1);
+      const monday = new Date(d.setDate(first));
+      groupKey = `Hafta: ${formatYMD(monday)}`;
+    } else if (groupBy === "month") {
+      groupKey = row.date.slice(0, 7); // YYYY-MM
+    }
+
+    if (!resultsMap.has(groupKey)) {
+      resultsMap.set(groupKey, { period: groupKey, total: 0, came: 0, missed: 0 });
+    }
+    const stats = resultsMap.get(groupKey);
+    stats.total += 1;
+    if (row.status === "Keldi") stats.came += 1;
+    if (row.status === "Kelmadi") stats.missed += 1;
+  });
+
+  const list = Array.from(resultsMap.values()).sort((a, b) => b.period.localeCompare(a.period));
+
+  return ok(res, {
+    dateFrom: formatYMD(start),
+    dateTo: formatYMD(end),
+    groupBy,
+    list
+  }, "Results list");
+});
+
 const getRecentActivity = asyncHandler(async (req, res) => {
   const { date, status = "Barchasi", search = "", sort = "date-desc" } = req.query;
 
@@ -744,6 +812,7 @@ module.exports = {
   recallStudent,
   getCalledList,
   getDailyReport,
+  getResults,
   getRecentActivity,
   telegramWebhook,
   deleteActivity,

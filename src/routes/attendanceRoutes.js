@@ -9,6 +9,7 @@ const {
   recallStudent,
   getCalledList,
   getDailyReport,
+  getResults,
   getRecentActivity,
   telegramWebhook,
   deleteActivity
@@ -32,9 +33,8 @@ router.patch("/:id/status", updateStatus);
 router.post("/:id/recall", recallStudent);
 router.get("/called", getCalledList);
 router.get("/report", getDailyReport);
+router.get("/results", getResults);
 router.get("/recent-activity", getRecentActivity);
 router.delete("/activity/:id", deleteActivity);
 
 module.exports = router;
-
-
