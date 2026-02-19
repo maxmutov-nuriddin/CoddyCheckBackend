@@ -7,22 +7,10 @@ const { normalizeGroupName } = require("../utils/normalizeGroupName");
 
 const { WizardScene } = Scenes;
 
-const requestKeyboard = Markup.keyboard([
-  ["➕ Qo'shimchaga chaqirish"],
-  ["❌ Bekor qilish"]
-]).resize();
-
 const cancelKeyboard = Markup.keyboard([["❌ Bekor qilish"]]).resize();
-
-function requestTypeFromText(text) {
-  if (text === "➕ Qo'shimchaga chaqirish") return "call_extra";
-  if (text === "📌 Qoldirmoqchi") return "keep";
-  return "";
-}
 
 function requestTypeLabel(type) {
   if (type === "call_extra") return "Qo'shimchaga chaqirish";
-  if (type === "keep") return "Qoldirmoqchi";
   return "So'rov";
 }
 
@@ -45,20 +33,7 @@ function cancelAndExit(ctx) {
 const callRequestScene = new WizardScene(
   "coddy_call_request_wizard",
   (ctx) => {
-    ctx.reply("So'rov turini tanlang:", requestKeyboard);
-    return ctx.wizard.next();
-  },
-  (ctx) => {
-    if (ctx.message?.text === "❌ Bekor qilish") {
-      return cancelAndExit(ctx);
-    }
-
-    const requestType = requestTypeFromText(String(ctx.message?.text || "").trim());
-    if (!requestType) {
-      return ctx.reply("Iltimos, tugmalardan birini tanlang.", requestKeyboard);
-    }
-
-    ctx.wizard.state.requestType = requestType;
+    ctx.wizard.state.requestType = "call_extra";
     ctx.reply("O'quvchi ism familiyasini kiriting:", cancelKeyboard);
     return ctx.wizard.next();
   },
