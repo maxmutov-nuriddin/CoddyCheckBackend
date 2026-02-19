@@ -43,8 +43,8 @@ const deleteGroup = asyncHandler(async (req, res) => {
       throw new ApiError(404, "Guruh topilmadi");
    }
 
-   // Check if group has students
-   const studentCount = await Student.countDocuments({ groupId: id });
+   // Check if group has active students
+   const studentCount = await Student.countDocuments({ groupId: id, isActive: true });
    if (studentCount > 0) {
       throw new ApiError(400, `Guruhda ${studentCount} ta o'quvchi bor. Avval ularni o'chiring yoki boshqa guruhga o'tkazing.`);
    }

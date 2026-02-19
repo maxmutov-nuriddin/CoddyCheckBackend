@@ -6,7 +6,12 @@ async function ensureDefaultGroups() {
   for (const name of defaultGroups) {
     const exists = await Group.findOne({ name });
     if (!exists) {
-      await Group.create({ name });
+      await Group.create({
+        name,
+        days: name,
+        time: "09:00",
+        mentor: "Tizim"
+      });
     }
   }
 }
