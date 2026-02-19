@@ -9,7 +9,6 @@ const { WizardScene } = Scenes;
 
 const requestKeyboard = Markup.keyboard([
   ["➕ Qo'shimchaga chaqirish"],
-  ["📌 Qoldirmoqchi"],
   ["❌ Bekor qilish"]
 ]).resize();
 
