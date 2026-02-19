@@ -85,8 +85,10 @@ const getAnalytics = asyncHandler(async (req, res) => {
     const totalInvited = gAtt.invited + gBot.invited;
     const totalAttended = gAtt.attended + gBot.attended;
 
+    const mentorCount = workers.filter(w => ["mentor", "mentor_ta"].includes(w.role)).length;
+
     const global = {
-      totalMentors: workers.length,
+      totalMentors: mentorCount,
       totalStudents,
       totalInvited,
       totalAttended,
@@ -149,7 +151,9 @@ const getAnalytics = asyncHandler(async (req, res) => {
     ]);
     const studentsByMentorMap = new Map(studentsByMentorAgg.map(r => [r._id, r]));
 
-    const mentorRows = workers.map((worker) => {
+    const mentorOnly = workers.filter(w => ["mentor", "mentor_ta"].includes(w.role));
+
+    const mentorRows = mentorOnly.map((worker) => {
       const nameKey = worker.fullName.toLowerCase();
 
       // Fuzzy match: Find an entry in the map where either the map key contains the user's name 
