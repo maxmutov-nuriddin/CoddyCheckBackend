@@ -4,8 +4,6 @@ const asyncHandler = require("../utils/asyncHandler");
 const { created, ok } = require("../utils/response");
 const { signToken } = require("../services/tokenService");
 
-const FIXED_KURATOR_PASSWORD = "1234";
-
 function normalizeRole(inputRole) {
   const raw = String(inputRole || "kurator").trim().toLowerCase();
   if (raw === "curator") return "kurator";
@@ -28,65 +26,32 @@ function normalizeFullName(payload) {
 const register = asyncHandler(async (req, res) => {
   const fullName = normalizeFullName(req.body);
   const phone = normalizePhone(req.body);
-  const role = normalizeRole(req.body.role);
   const telegramId = req.body.telegramId;
-  const password = req.body.password;
+  const password = String(req.body.password || "").trim();
 
   if (!fullName || !phone) {
-    throw new ApiError(400, "fullName (or name) and phone are required");
+    throw new ApiError(400, "Ism va telefon raqam kiritilishi shart");
   }
 
-  if (role !== "kurator") {
-    throw new ApiError(400, "Only kurator role can register for web access");
+  if (!password) {
+    throw new ApiError(400, "Parol kiritilishi shart");
   }
 
-  if (password && String(password) !== FIXED_KURATOR_PASSWORD) {
-    throw new ApiError(400, "Password must be 1234 for kurator web login");
+  // Only one account allowed in the system
+  const existingCount = await User.countDocuments({ role: "kurator" });
+  if (existingCount > 0) {
+    throw new ApiError(403, "Tizimda allaqachon akkaunt mavjud. Yangi ro'yxatdan o'tish mumkin emas.");
   }
 
-  let user = await User.findOne({ phone });
-
-  if (user) {
-    if (user.role !== "kurator") {
-      throw new ApiError(409, "This phone already belongs to non-kurator user");
-    }
-
-    user.fullName = fullName;
-    user.telegramId = telegramId || user.telegramId;
-    user.password = FIXED_KURATOR_PASSWORD;
-    user.isActive = true;
-    await user.save();
-
-    const token = signToken(user);
-
-    return ok(
-      res,
-      {
-        token,
-        user: {
-          _id: user._id,
-          fullName: user.fullName,
-          role: user.role,
-          phone: user.phone,
-          telegramId: user.telegramId
-        }
-      },
-      "Kurator account reset and logged in"
-    );
-  }
-
-  user = await User.create({
+  const user = await User.create({
     fullName,
     role: "kurator",
     phone,
     telegramId,
-    password: FIXED_KURATOR_PASSWORD
+    password,
   });
 
-  console.log("User created in DB:", user._id);
-
   const token = signToken(user);
-  console.log("Token generated for:", user._id);
 
   return created(
     res,
@@ -97,8 +62,8 @@ const register = asyncHandler(async (req, res) => {
         fullName: user.fullName,
         role: user.role,
         phone: user.phone,
-        telegramId: user.telegramId
-      }
+        telegramId: user.telegramId,
+      },
     },
     "Kurator registered"
   );
@@ -206,10 +171,16 @@ const changePassword = asyncHandler(async (req, res) => {
   return ok(res, null, "Parol muvaffaqiyatli o'zgartirildi");
 });
 
+const deleteAccount = asyncHandler(async (req, res) => {
+  await User.findByIdAndDelete(req.user._id);
+  return ok(res, null, "Akkaunt o'chirildi");
+});
+
 module.exports = {
   register,
   login,
   getMe,
   updateProfile,
-  changePassword
+  changePassword,
+  deleteAccount
 };
