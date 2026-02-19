@@ -189,7 +189,38 @@ const getAnalytics = asyncHandler(async (req, res) => {
       };
     });
 
-    // ── 4. Trend (6 months) ──────────────────────────────────────────────────
+    // ── 4. TA Statistics (Registration/Marking entries) ────────────────────
+    const taEntriesAgg = await CoddyAttendance.aggregate([
+      { $match: { ...botMatch, requestType: "mark" } },
+      {
+        $group: {
+          _id: { $toLower: { $ifNull: ["$teacherName", "noma'lum"] } },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    const taEntriesMap = new Map(taEntriesAgg.map(r => [r._id, r.count]));
+
+    const taRoles = ["ta", "mentor_ta"];
+    const taRows = workers
+      .filter(w => taRoles.includes(w.role))
+      .map(worker => {
+        const nameKey = worker.fullName.toLowerCase();
+        const matchedKey = Array.from(taEntriesMap.keys()).find(k =>
+          k.includes(nameKey) || nameKey.includes(k)
+        );
+        const count = matchedKey ? taEntriesMap.get(matchedKey) : 0;
+
+        return {
+          id: worker._id,
+          name: worker.fullName,
+          role: worker.role,
+          entryCount: count
+        };
+      })
+      .sort((a, b) => b.entryCount - a.entryCount);
+
+    // ── 5. Trend (6 months) ──────────────────────────────────────────────────
     const sixMonthsAgo = new Date();
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
     sixMonthsAgo.setDate(1);
@@ -259,6 +290,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
       global,
       statusCounts,
       mentorRows,
+      taRows,
       trend,
     }, "Analytics data");
   } catch (error) {
