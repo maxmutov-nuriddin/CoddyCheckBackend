@@ -31,15 +31,15 @@ async function userAllowed(ctx) {
   const telegramId = Number(ctx.from?.id);
   if (!telegramId) return { allowed: false, worker: null };
 
-  // Env-based superadmin (always allowed without DB lookup)
-  if (env.coddyAdminIds.includes(telegramId)) {
-    return { allowed: true, worker: null };
-  }
-
-  // DB-based: any active platform user with telegramId set
+  // DB-based: check registered users first (curator, mentor, ta, mentor_ta)
   const user = await findBotUserByTelegramId(telegramId);
   if (user) {
     return { allowed: true, worker: user };
+  }
+
+  // Env-based fallback for emergency access without DB record
+  if (env.coddyAdminIds.includes(telegramId)) {
+    return { allowed: true, worker: null };
   }
 
   return { allowed: false, worker: null };
