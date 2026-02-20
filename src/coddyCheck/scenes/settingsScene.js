@@ -1,4 +1,4 @@
-const { Scenes, Markup } = require("telegraf");
+﻿const { Scenes, Markup } = require("telegraf");
 const { DateTime } = require("luxon");
 const CoddyAttendance = require("../models/CoddyAttendance");
 const { getWorkerMainKeyboard } = require("../keyboards");
@@ -6,8 +6,8 @@ const { getWorkerMainKeyboard } = require("../keyboards");
 const { WizardScene } = Scenes;
 
 const SETTINGS_KEYBOARD = Markup.keyboard([
-  ["📓 Mening yozuvlarim", "📊 TA statistikasi"],
-  ["🔙 Orqaga"]
+  ["Mening yozuvlarim", "TA statistikasi"],
+  ["Orqaga"]
 ]).resize();
 
 async function showMyMarks(ctx) {
@@ -20,24 +20,23 @@ async function showMyMarks(ctx) {
   }
 
   const today = DateTime.now().setZone("Asia/Tashkent").toFormat("yyyy-MM-dd");
-
-  let message = "📓 So'nggi 10 ta yozuvingiz:\n\n";
+  let message = "So'nggi 10 ta yozuvingiz:\n\n";
   const buttons = [];
 
   records.forEach((row, index) => {
     message += `${index + 1}. ${row.date} ${row.time}\n`;
-    message += `👤 ${row.studentName} (${row.studentGroup})\n`;
-    message += `📚 ${row.topic}\n\n`;
+    message += `O'quvchi: ${row.studentName} (${row.studentGroup})\n`;
+    message += `Mavzu: ${row.topic}\n\n`;
 
     if (row.date === today) {
       buttons.push([
-        Markup.button.callback("✏️ Tahrirlash", `coddy_edit_mark_${row._id}`),
-        Markup.button.callback("❌ O'chirish", `coddy_delete_mark_${row._id}`)
+        Markup.button.callback("Tahrirlash", `coddy_edit_mark_${row._id}`),
+        Markup.button.callback("O'chirish", `coddy_delete_mark_${row._id}`)
       ]);
     }
   });
 
-  message += "Faqat bugungi yozuvlarni tahrirlash/o'chirish mumkin.";
+  message += "Faqat bugungi yozuvlarni tahrirlash yoki o'chirish mumkin.";
   await ctx.reply(message, Markup.inlineKeyboard(buttons));
 }
 
@@ -55,15 +54,13 @@ async function showTaStats(ctx) {
 
   const myRecord = await CoddyAttendance.findOne({ teacherId: ctx.from.id }).lean();
   const myName = myRecord?.teacherName?.toLowerCase();
-
-  const medals = ["🥇", "🥈", "🥉"];
-  const lines = ["📊 <b>TA statistikasi — jami qo'shilgan o'quvchilar:</b>\n"];
+  const lines = ["<b>TA statistikasi - jami qo'shilgan o'quvchilar:</b>\n"];
 
   stats.forEach((s, i) => {
-    const prefix = medals[i] || `${i + 1}.`;
+    const prefix = `${i + 1}.`;
     const isMe = myName && s._id?.toLowerCase() === myName;
-    const marker = isMe ? " <b>← Siz</b>" : "";
-    lines.push(`${prefix} ${s._id || "Noma'lum"} — <b>${s.count}</b> ta${marker}`);
+    const marker = isMe ? " <b><- Siz</b>" : "";
+    lines.push(`${prefix} ${s._id || "Noma'lum"} - <b>${s.count}</b> ta${marker}`);
   });
 
   await ctx.reply(lines.join("\n"), { parse_mode: "HTML", reply_markup: SETTINGS_KEYBOARD.reply_markup });
@@ -71,40 +68,46 @@ async function showTaStats(ctx) {
 
 const settingsScene = new WizardScene(
   "coddy_settings_scene",
-  (ctx) => {
-    ctx.reply("⚙️ Sozlamalar", SETTINGS_KEYBOARD);
+  async (ctx) => {
+    const role = String(ctx.state?.worker?.role || "").toLowerCase();
+
+    if (role === "mentor") {
+      await ctx.reply("Tez kunda", Markup.keyboard(getWorkerMainKeyboard(role)).resize());
+      return ctx.scene.leave();
+    }
+
+    await ctx.reply("Sozlamalar", SETTINGS_KEYBOARD);
     return ctx.wizard.next();
   },
   async (ctx) => {
     const text = ctx.message?.text;
 
-    if (text === "🔙 Orqaga") {
+    if (text === "Orqaga") {
       const role = ctx.state?.worker?.role;
       await ctx.reply("Asosiy menyu", Markup.keyboard(getWorkerMainKeyboard(role)).resize());
       return ctx.scene.leave();
     }
 
-    if (text === "📓 Mening yozuvlarim") {
+    if (text === "Mening yozuvlarim") {
       try {
         await showMyMarks(ctx);
       } catch (err) {
         console.error("showMyMarks error:", err);
         await ctx.reply("Yozuvlarni olishda xatolik.");
       }
-      // Leave scene so inline edit/delete buttons work from bot-level handlers
       const role = ctx.state?.worker?.role;
       await ctx.reply("Asosiy menyu", Markup.keyboard(getWorkerMainKeyboard(role)).resize());
       return ctx.scene.leave();
     }
 
-    if (text === "📊 TA statistikasi") {
+    if (text === "TA statistikasi") {
       try {
         await showTaStats(ctx);
       } catch (err) {
         console.error("showTaStats error:", err);
         await ctx.reply("Statistikani olishda xatolik.", SETTINGS_KEYBOARD);
       }
-      return; // stay in sozlamalar
+      return;
     }
 
     return ctx.reply("Menyudan tanlang.", SETTINGS_KEYBOARD);
