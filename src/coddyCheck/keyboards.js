@@ -1,17 +1,16 @@
 ﻿const mentorMainKeyboard = [
-  ["📣 O'quvchi chaqirish", "📓 Mening yozuvlarim"],
+  ["📣 O'quvchi chaqirish"],
   ["⚙️ Sozlamalar", "ℹ️ Yordam"]
 ];
 
 const taMainKeyboard = [
-  ["➕ O'quvchi qo'shish", "📓 Mening yozuvlarim"],
+  ["➕ O'quvchi qo'shish"],
   ["⚙️ Sozlamalar", "ℹ️ Yordam"]
 ];
 
 const mentorTaMainKeyboard = [
   ["📣 O'quvchi chaqirish", "➕ O'quvchi qo'shish"],
-  ["📓 Mening yozuvlarim", "⚙️ Sozlamalar"],
-  ["ℹ️ Yordam"]
+  ["⚙️ Sozlamalar", "ℹ️ Yordam"]
 ];
 
 const teacherMainKeyboard = mentorMainKeyboard;

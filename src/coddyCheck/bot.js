@@ -153,7 +153,6 @@ async function startCoddyCheckBot() {
   });
 
   coddyBot.hears("➕ O'quvchi qo'shish", (ctx) => ctx.scene.enter("coddy_attendance_wizard"));
-  coddyBot.hears("📓 Mening yozuvlarim", teacherController.listMyMarks);
   coddyBot.hears("⚙️ Sozlamalar", (ctx) => ctx.scene.enter("coddy_settings_scene"));
   coddyBot.hears("ℹ️ Yordam", (ctx) =>
     ctx.reply(
