@@ -237,19 +237,20 @@ const getAnalytics = asyncHandler(async (req, res) => {
           $group: {
             _id: { month: { $month: "$date" }, year: { $year: "$date" } },
             invited: { $sum: { $cond: [{ $eq: ["$callStatus", "chaqirilgan"] }, 1, 0] } },
-            attended: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } }
+            attended: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "kelmadi"] }, 1, 0] } }
           }
         },
         { $sort: { "_id.year": 1, "_id.month": 1 } }
       ]).catch(err => { console.error("trendAgg error:", err); return []; }),
       CoddyAttendance.aggregate([
-        { $match: { date: { $gte: formatYMD(sixMonthsAgo) } } },
+        { $match: { requestType: "mark", date: { $gte: formatYMD(sixMonthsAgo) } } },
         { $addFields: { dateObj: { $dateFromString: { dateString: "$date", onError: new Date(0) } } } },
         {
           $group: {
             _id: { month: { $month: "$dateObj" }, year: { $year: "$dateObj" } },
-            invited: { $sum: { $cond: [{ $in: ["$requestType", ["call_extra", "keep"]] }, 1, 0] } },
-            attended: { $sum: { $cond: [{ $and: [{ $eq: ["$requestType", "mark"] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } }
+            attended: { $sum: { $cond: [{ $eq: ["$status", "Keldi"] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $eq: ["$status", "Kelmadi"] }, 1, 0] } }
           }
         },
         { $sort: { "_id.year": 1, "_id.month": 1 } }
@@ -272,21 +273,22 @@ const getAnalytics = asyncHandler(async (req, res) => {
         const existing = trendMap.get(key);
         existing.invited += r.invited;
         existing.attended += r.attended;
+        existing.missed += r.missed;
       }
     });
     trendBotAgg.forEach((r) => {
       const key = `${r._id.year}-${r._id.month}`;
       if (trendMap.has(key)) {
         const existing = trendMap.get(key);
-        existing.invited += r.invited;
         existing.attended += r.attended;
+        existing.missed += r.missed;
       }
     });
 
     const trend = Array.from(trendMap.values()).map((t) => ({
       month: t.name,
       attended: t.attended,
-      missed: Math.max(0, t.invited - t.attended),
+      missed: t.missed,
       pct: t.invited > 0 ? Math.min(Math.round((t.attended / t.invited) * 100), 100) : 0
     }));
 
