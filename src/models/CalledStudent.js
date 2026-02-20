@@ -17,6 +17,10 @@ const callEntrySchema = new mongoose.Schema({
    calledAt: {
       type: Date,
       default: Date.now
+   },
+   resolvedAt: {
+      type: Date,
+      default: null
    }
 });
 

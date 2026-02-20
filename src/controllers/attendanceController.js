@@ -84,6 +84,40 @@ function resolveNotifyDate(dateInput) {
   return defaultDate;
 }
 
+async function syncCalledStudentStatus({ studentId, date, status }) {
+  if (!studentId || !date || !["keldi", "kelmadi"].includes(status)) {
+    return null;
+  }
+
+  const normalizedDate = normalizeDateOnly(date);
+  const calledRecord = await CalledStudent.findOne({ studentId, date: normalizedDate }).sort({ createdAt: -1 });
+  if (!calledRecord) return null;
+
+  calledRecord.lastStatus = status;
+
+  if (Array.isArray(calledRecord.calls) && calledRecord.calls.length > 0) {
+    const now = new Date();
+    let targetCall = null;
+
+    for (let i = calledRecord.calls.length - 1; i >= 0; i -= 1) {
+      if (calledRecord.calls[i].status === "pending") {
+        targetCall = calledRecord.calls[i];
+        break;
+      }
+    }
+
+    if (!targetCall) {
+      targetCall = calledRecord.calls[calledRecord.calls.length - 1];
+    }
+
+    targetCall.status = status;
+    targetCall.resolvedAt = now;
+  }
+
+  await calledRecord.save();
+  return calledRecord;
+}
+
 const manualAttendance = asyncHandler(async (req, res) => {
   const { studentId, date, attendanceStatus, comment = "" } = req.body;
 
@@ -144,6 +178,7 @@ const manualAttendance = asyncHandler(async (req, res) => {
     attendance.taId = req.user._id;
     attendance.callStatus = "chaqirilgan"; // If it existed but was null, it was a call
     await attendance.save();
+    await syncCalledStudentStatus({ studentId: attendance.studentId, date: normalizedDate, status: attendanceStatus });
     return ok(res, attendance, "Attendance reconciled with existing call");
   }
 
@@ -162,6 +197,8 @@ const manualAttendance = asyncHandler(async (req, res) => {
     comment,
     botIntegration: wasCalled
   });
+
+  await syncCalledStudentStatus({ studentId: attendance.studentId, date: normalizedDate, status: attendanceStatus });
 
   return created(res, attendance, wasCalled ? "Manual arrival reconciled" : "Manual attendance created");
 });
@@ -354,6 +391,8 @@ const updateStatus = asyncHandler(async (req, res) => {
     changedBy: req.user._id,
     source: "manual"
   });
+
+  await syncCalledStudentStatus({ studentId: updated.studentId, date: updated.date, status: attendanceStatus });
 
   return ok(res, updated, "Attendance status updated");
 });
@@ -649,6 +688,8 @@ const telegramWebhook = asyncHandler(async (req, res) => {
     changedBy: null,
     source: "bot"
   });
+
+  await syncCalledStudentStatus({ studentId: updated.studentId, date: updated.date, status });
 
   return ok(res, updated, "Attendance status updated from bot callback");
 });

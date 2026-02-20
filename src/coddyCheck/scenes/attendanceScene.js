@@ -236,12 +236,14 @@ const attendanceScene = new WizardScene(
             for (let i = calledRecord.calls.length - 1; i >= 0; i -= 1) {
               if (calledRecord.calls[i].status === "pending") {
                 calledRecord.calls[i].status = "keldi";
+                calledRecord.calls[i].resolvedAt = now.toJSDate();
                 updated = true;
                 break;
               }
             }
             if (!updated) {
               calledRecord.calls[calledRecord.calls.length - 1].status = "keldi";
+              calledRecord.calls[calledRecord.calls.length - 1].resolvedAt = now.toJSDate();
             }
           }
           await calledRecord.save();
