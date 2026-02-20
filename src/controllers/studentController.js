@@ -15,7 +15,7 @@ const getStudents = asyncHandler(async (req, res) => {
   }
 
   const students = await Student.find(filter)
-    .populate("groupId", "name")
+    .populate("groupId", "name mentor")
     .sort({ createdAt: -1 });
 
   return ok(res, students);
@@ -97,7 +97,7 @@ const getFrozenStudents = asyncHandler(async (req, res) => {
   };
 
   const students = await Student.find(filter)
-    .populate("groupId", "name")
+    .populate("groupId", "name mentor")
     .sort({ updatedAt: -1 });
 
   return ok(res, students);
