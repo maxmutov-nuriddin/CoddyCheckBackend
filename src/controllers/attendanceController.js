@@ -503,17 +503,38 @@ const getResults = asyncHandler(async (req, res) => {
     callStatus: "chaqirilgan"
   };
 
-  const attendanceRows = await Attendance.find(filter)
-    .populate("studentId", "fullName")
-    .populate("groupId", "name")
-    .sort({ date: 1, time: 1 })
-    .lean();
-
   const botMatch = {
     date: { $gte: formatYMD(start), $lte: formatYMD(end) },
     requestType: "mark"
   };
-  const botRows = await CoddyAttendance.find(botMatch).sort({ date: 1, time: 1 }).lean();
+  const [attendanceRowsRaw, botRowsRaw, staff] = await Promise.all([
+    Attendance.find(filter)
+      .populate("studentId", "fullName")
+      .populate("groupId", "name")
+      .populate("mentorId", "fullName role")
+      .populate("taId", "fullName role")
+      .sort({ date: 1, time: 1 })
+      .lean(),
+    CoddyAttendance.find(botMatch).sort({ date: 1, time: 1 }).lean(),
+    loadActiveStaffForMatching()
+  ]);
+
+  const roleByTelegramId = new Map(
+    staff
+      .filter((item) => item && item.telegramId)
+      .map((item) => [String(item.telegramId), String(item.role || "unknown").toLowerCase()])
+  );
+
+  const attendanceRows = attendanceRowsRaw.filter((row) => {
+    const mentorRole = String(row.mentorId?.role || "").toLowerCase();
+    const taRole = String(row.taId?.role || "").toLowerCase();
+    return mentorRole !== "kurator" && taRole !== "kurator";
+  });
+
+  const botRows = botRowsRaw.filter((row) => {
+    const requesterRole = String(row.requesterRole || roleByTelegramId.get(String(row.teacherId || "")) || "").toLowerCase();
+    return requesterRole !== "kurator";
+  });
 
   // Merge rows for summary
   const allRows = [
