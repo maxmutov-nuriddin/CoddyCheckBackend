@@ -730,14 +730,19 @@ const getAllActivity = asyncHandler(async (req, res) => {
     Attendance.find(attendanceQuery)
       .populate("studentId", "fullName")
       .populate("groupId", "name")
-      .populate("mentorId", "fullName")
-      .populate("taId", "fullName")
+      .populate("mentorId", "fullName role")
+      .populate("taId", "fullName role")
       .sort({ date: -1, time: -1, createdAt: -1 })
       .lean(),
     loadActiveStaffForMatching()
   ]);
 
   const q = String(search || "").trim().toLowerCase();
+  const roleByTelegramId = new Map(
+    staff
+      .filter((item) => item && item.telegramId)
+      .map((item) => [String(item.telegramId), String(item.role || "unknown").toLowerCase()])
+  );
 
   const mappedBot = botRows.map((row) => ({
     id: `bot-${row._id}`,
@@ -751,44 +756,52 @@ const getAllActivity = asyncHandler(async (req, res) => {
     ta: row.teacherName,
     source: "bot",
     requestType: row.requestType || "mark",
-    requesterRole: row.requesterRole || "unknown",
+    requesterRole: row.requesterRole || roleByTelegramId.get(String(row.teacherId || "")) || "unknown",
     callConfirmed: true
   }));
 
-  const mappedWeb = webRows.map((row) => {
-    const statusLabel =
-      row.attendanceStatus === "keldi"
-        ? "Keldi"
-        : row.attendanceStatus === "kelmadi"
-          ? "Kelmadi"
-          : "Kutilmoqda";
+  const mappedWeb = webRows
+    .filter((row) => {
+      const mentorRole = String(row.mentorId?.role || "").toLowerCase();
+      const taRole = String(row.taId?.role || "").toLowerCase();
+      return mentorRole !== "kurator" && taRole !== "kurator";
+    })
+    .map((row) => {
+      const statusLabel =
+        row.attendanceStatus === "keldi"
+          ? "Keldi"
+          : row.attendanceStatus === "kelmadi"
+            ? "Kelmadi"
+            : "Kutilmoqda";
 
-    const timeLabel = row.time ? new Date(row.time).toTimeString().slice(0, 5) : "--:--";
+      const timeLabel = row.time ? new Date(row.time).toTimeString().slice(0, 5) : "--:--";
 
-    return {
-      id: `web-${row._id}`,
-      date: formatYMD(row.date),
-      time: timeLabel,
-      mentor: row.mentorId?.fullName || "-",
-      group: row.groupId?.name || "-",
-      student: row.studentId?.fullName || "Deleted student",
-      status: statusLabel,
-      comment: row.comment || "",
-      ta: row.taId?.fullName || "-",
-      source: "web",
-      callStatus: row.callStatus || "chaqirilmagan",
-      requestType: "web_attendance",
-      requesterRole: "web"
-    };
-  });
+      return {
+        id: `web-${row._id}`,
+        date: formatYMD(row.date),
+        time: timeLabel,
+        mentor: row.mentorId?.fullName || "-",
+        group: row.groupId?.name || "-",
+        student: row.studentId?.fullName || "Deleted student",
+        status: statusLabel,
+        comment: row.comment || "",
+        ta: row.taId?.fullName || "-",
+        source: "web",
+        callStatus: row.callStatus || "chaqirilmagan",
+        requestType: "web_attendance",
+        requesterRole: "web"
+      };
+    });
 
-  let mapped = [...mappedWeb, ...mappedBot].filter((row) => {
-    if (!q) return true;
-    const haystack = [row.student, row.group, row.mentor, row.ta, row.comment, row.status]
-      .map((part) => String(part || "").toLowerCase())
-      .join(" ");
-    return haystack.includes(q);
-  });
+  let mapped = [...mappedWeb, ...mappedBot]
+    .filter((row) => String(row.requesterRole || "").toLowerCase() !== "kurator")
+    .filter((row) => {
+      if (!q) return true;
+      const haystack = [row.student, row.group, row.mentor, row.ta, row.comment, row.status]
+        .map((part) => String(part || "").toLowerCase())
+        .join(" ");
+      return haystack.includes(q);
+    });
 
   if (status !== "Barchasi") {
     mapped = mapped.filter((row) => row.status === status);
