@@ -7,7 +7,8 @@ let coddyBot = null;
 let coddyMode = "disabled";
 
 function isAdmin(ctx) {
-  return env.coddyAdminIds.includes(Number(ctx.from?.id));
+  if (env.coddyAdminIds.includes(Number(ctx.from?.id))) return true;
+  return ctx.state?.worker?.role === "kurator";
 }
 
 function canUseCallRequest(ctx) {
@@ -15,14 +16,14 @@ function canUseCallRequest(ctx) {
   return role === "mentor" || role === "mentor_ta";
 }
 
-async function findBotWorkerByTelegramId(telegramId) {
+async function findBotUserByTelegramId(telegramId) {
   const normalized = String(telegramId || "").trim();
   if (!normalized) return null;
 
   return User.findOne({
     telegramId: normalized,
     isActive: true,
-    role: { $in: ["mentor", "ta", "mentor_ta"] }
+    role: { $in: ["kurator", "mentor", "ta", "mentor_ta"] }
   });
 }
 
@@ -30,17 +31,15 @@ async function userAllowed(ctx) {
   const telegramId = Number(ctx.from?.id);
   if (!telegramId) return { allowed: false, worker: null };
 
-  if (isAdmin(ctx)) {
+  // Env-based superadmin (always allowed without DB lookup)
+  if (env.coddyAdminIds.includes(telegramId)) {
     return { allowed: true, worker: null };
   }
 
-  const worker = await findBotWorkerByTelegramId(telegramId);
-  if (worker) {
-    return { allowed: true, worker };
-  }
-
-  if (env.coddyAllowedIds.length) {
-    return { allowed: env.coddyAllowedIds.includes(telegramId), worker: null };
+  // DB-based: any active platform user with telegramId set
+  const user = await findBotUserByTelegramId(telegramId);
+  if (user) {
+    return { allowed: true, worker: user };
   }
 
   return { allowed: false, worker: null };
