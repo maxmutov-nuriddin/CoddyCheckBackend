@@ -24,6 +24,7 @@ async function autoCloseUnmarkedAttendances(dayStart, dayEnd) {
   const markAsCame = await Attendance.updateMany(
     {
       date: { $gte: dayStart, $lte: dayEnd },
+      callStatus: "chaqirilgan",
       attendanceStatus: null,
       arrivalConfirmedAt: { $ne: null }
     },
@@ -38,6 +39,7 @@ async function autoCloseUnmarkedAttendances(dayStart, dayEnd) {
   const markAsNotCame = await Attendance.updateMany(
     {
       date: { $gte: dayStart, $lte: dayEnd },
+      callStatus: "chaqirilgan",
       attendanceStatus: null
     },
     {

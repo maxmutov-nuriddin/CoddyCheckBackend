@@ -2,10 +2,12 @@
 const Attendance = require("../models/Attendance");
 const User = require("../models/User");
 const TaNotificationTask = require("../models/TaNotificationTask");
+const CoddyAttendance = require("../coddyCheck/models/CoddyAttendance");
 const { sendTelegramMessage } = require("../services/telegramService");
 const { addDays, formatYMD, getDayBounds } = require("../utils/date");
 const env = require("../config/env");
 const { autoCloseUnmarkedAttendances } = require("../services/attendanceService");
+const { loadActiveStaffForMatching, resolveMentorNameFromWorkers } = require("../coddyCheck/utils/mentorNameResolver");
 
 function attendanceLine(row, idx) {
   const student = row.studentId?.fullName || "Deleted student";
@@ -20,6 +22,241 @@ function buildInlineButtons(rows) {
       { text: `Keldi: ${row.studentId?.fullName || "Student"}`, callback_data: `keldi:${row._id}` },
       { text: "Kelmadi", callback_data: `kelmadi:${row._id}` }
     ])
+  };
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function dedupePlannedEntries(entries) {
+  const map = new Map();
+  for (const entry of entries) {
+    const key = [
+      String(entry.student || "").toLowerCase().trim(),
+      String(entry.group || "").toLowerCase().trim()
+    ].join("|");
+    if (!map.has(key)) {
+      map.set(key, entry);
+      continue;
+    }
+
+    const existing = map.get(key);
+    const existingTime = String(existing.time || "");
+    const incomingTime = String(entry.time || "");
+    if (incomingTime && (!existingTime || incomingTime < existingTime)) {
+      map.set(key, entry);
+    }
+  }
+  return Array.from(map.values());
+}
+
+function buildPlannedLines(entries) {
+  return entries
+    .map((entry, idx) => {
+      const student = escapeHtml(entry.student || "Noma'lum");
+      const group = escapeHtml(entry.group || "-");
+      const time = escapeHtml(entry.time || "--:--");
+      return `${idx + 1}. ${student} (${group}) - ${time}`;
+    })
+    .join("\n");
+}
+
+async function collectTodayPlannedEntries(dateInput) {
+  const { start, end } = getDayBounds(dateInput);
+  const dateStr = formatYMD(dateInput);
+
+  const [webRows, botRows, staff] = await Promise.all([
+    Attendance.find({
+      date: { $gte: start, $lte: end },
+      callStatus: "chaqirilgan"
+    })
+      .populate("studentId", "fullName")
+      .populate("groupId", "name")
+      .populate("mentorId", "fullName telegramId role")
+      .lean(),
+    CoddyAttendance.find({
+      date: dateStr,
+      requestType: { $in: ["call_extra", "keep"] },
+      callConfirmed: true,
+      status: "Kutilmoqda"
+    }).lean(),
+    loadActiveStaffForMatching()
+  ]);
+
+  const mentorByName = new Map(
+    (staff || [])
+      .filter((item) => item && item.telegramId && ["mentor", "mentor_ta"].includes(String(item.role || "").toLowerCase()))
+      .map((item) => [String(item.fullName || "").trim().toLowerCase(), item])
+  );
+
+  const entries = [];
+
+  for (const row of webRows) {
+    entries.push({
+      student: row.studentId?.fullName || "Noma'lum",
+      group: row.groupId?.name || "-",
+      time: row.time ? new Date(row.time).toTimeString().slice(0, 5) : "--:--",
+      mentorName: row.mentorId?.fullName || "",
+      mentorTelegramId: row.mentorId?.telegramId ? String(row.mentorId.telegramId) : ""
+    });
+  }
+
+  for (const row of botRows) {
+    const resolvedMentorName = resolveMentorNameFromWorkers(row.mainTeacher, staff);
+    const mentorRecord = mentorByName.get(String(resolvedMentorName || "").trim().toLowerCase())
+      || mentorByName.get(String(row.mainTeacher || "").trim().toLowerCase());
+
+    entries.push({
+      student: row.studentName || "Noma'lum",
+      group: row.studentGroup || "-",
+      time: row.time || "--:--",
+      mentorName: mentorRecord?.fullName || resolvedMentorName || row.mainTeacher || "",
+      mentorTelegramId: mentorRecord?.telegramId ? String(mentorRecord.telegramId) : ""
+    });
+  }
+
+  return dedupePlannedEntries(entries);
+}
+
+async function sendMorningTodayExpectedDigest() {
+  const today = new Date();
+  const dateStr = formatYMD(today);
+  const plannedEntries = await collectTodayPlannedEntries(today);
+
+  if (plannedEntries.length === 0) {
+    return { totalEntries: 0, taNotified: 0, mentorNotified: 0 };
+  }
+
+  const taUsers = await User.find({
+    role: { $in: ["ta", "mentor_ta"] },
+    isActive: true,
+    telegramId: { $nin: [null, ""] }
+  })
+    .select("telegramId")
+    .lean();
+
+  const taText = [
+    `📌 <b>Bugungi ro'yxat (${escapeHtml(dateStr)})</b>`,
+    "Quyidagi o'quvchilar bugun kelishi kerak:",
+    "",
+    buildPlannedLines(plannedEntries)
+  ].join("\n");
+
+  let taNotified = 0;
+  for (const user of taUsers) {
+    try {
+      await sendTelegramMessage({ telegramId: user.telegramId, text: taText });
+      taNotified += 1;
+    } catch (error) {
+      console.error(`Failed to send 09:00 TA digest to ${user.telegramId}:`, error.message);
+    }
+  }
+
+  const mentorMap = new Map();
+  for (const entry of plannedEntries) {
+    const chatId = String(entry.mentorTelegramId || "").trim();
+    if (!chatId) continue;
+    if (!mentorMap.has(chatId)) {
+      mentorMap.set(chatId, []);
+    }
+    mentorMap.get(chatId).push(entry);
+  }
+
+  let mentorNotified = 0;
+  for (const [chatId, entries] of mentorMap.entries()) {
+    const text = [
+      `📌 <b>Bugungi kutilgan o'quvchilar (${escapeHtml(dateStr)})</b>`,
+      "Quyidagi o'quvchilaringiz bugun kelishi kerak:",
+      "",
+      buildPlannedLines(entries)
+    ].join("\n");
+
+    try {
+      await sendTelegramMessage({ telegramId: chatId, text });
+      mentorNotified += 1;
+    } catch (error) {
+      console.error(`Failed to send 09:00 mentor digest to ${chatId}:`, error.message);
+    }
+  }
+
+  return {
+    totalEntries: plannedEntries.length,
+    taNotified,
+    mentorNotified
+  };
+}
+
+async function autoClosePendingBotCallsAndNotifyTeachers(dateInput) {
+  const dateStr = formatYMD(dateInput);
+  const pendingCalls = await CoddyAttendance.find({
+    date: dateStr,
+    requestType: { $in: ["call_extra", "keep"] },
+    callConfirmed: true,
+    status: "Kutilmoqda"
+  })
+    .sort({ teacherId: 1, createdAt: 1 })
+    .lean();
+
+  if (pendingCalls.length === 0) {
+    return { updated: 0, notifiedTeachers: 0 };
+  }
+
+  const ids = pendingCalls.map((row) => row._id);
+  await CoddyAttendance.updateMany(
+    { _id: { $in: ids } },
+    { $set: { status: "Kelmadi" } }
+  );
+
+  const byTeacher = new Map();
+  for (const row of pendingCalls) {
+    const key = String(row.teacherId || "");
+    if (!key) continue;
+    if (!byTeacher.has(key)) {
+      byTeacher.set(key, []);
+    }
+    byTeacher.get(key).push(row);
+  }
+
+  let notifiedTeachers = 0;
+  for (const [teacherId, rows] of byTeacher.entries()) {
+    const list = rows
+      .map((row, idx) => {
+        const student = escapeHtml(row.studentName || "Noma'lum");
+        const group = escapeHtml(row.studentGroup || "-");
+        const time = escapeHtml(row.time || "--:--");
+        return `${idx + 1}. ${student} (${group}) - ${time}`;
+      })
+      .join("\n");
+
+    const text = [
+      "⚠️ <b>Bugungi chaqiruv yakunlandi</b>",
+      "",
+      `Sana: <b>${escapeHtml(dateStr)}</b>`,
+      "Quyidagi chaqirilgan o'quvchilar kun davomida belgilanmadi, status avtomatik <b>Kelmadi</b> qilindi:",
+      "",
+      list
+    ].join("\n");
+
+    try {
+      await sendTelegramMessage({
+        telegramId: teacherId,
+        text
+      });
+      notifiedTeachers += 1;
+    } catch (error) {
+      console.error(`Failed to notify teacher ${teacherId} about auto Kelmadi:`, error.message);
+    }
+  }
+
+  return {
+    updated: ids.length,
+    notifiedTeachers
   };
 }
 
@@ -235,6 +472,8 @@ function startAttendanceJobs() {
       const { start, end } = getDayBounds(today);
       const autoCloseResult = await autoCloseUnmarkedAttendances(start, end);
       console.log("20:00 auto check result:", autoCloseResult);
+      const autoBotCloseResult = await autoClosePendingBotCallsAndNotifyTeachers(today);
+      console.log("20:00 auto bot close result:", autoBotCloseResult);
 
       const tomorrow = addDays(today, 1);
       await sendReminderToTAs({
@@ -254,11 +493,8 @@ function startAttendanceJobs() {
     async () => {
       const today = new Date();
       await sendScheduledTaNotifications();
-      await sendReminderToTAs({
-        dateInput: today,
-        hourTag: "09:00",
-        includeButtons: true
-      });
+      const digestResult = await sendMorningTodayExpectedDigest();
+      console.log("09:00 expected today digest:", digestResult);
     },
     { timezone: env.appTimezone }
   );
