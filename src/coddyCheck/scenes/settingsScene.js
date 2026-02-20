@@ -10,6 +10,15 @@ const SETTINGS_KEYBOARD = Markup.keyboard([
   ["Orqaga"]
 ]).resize();
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 async function showMyMarks(ctx) {
   const teacherId = ctx.from.id;
   const records = await CoddyAttendance.find({ teacherId }).sort({ createdAt: -1 }).limit(10);
@@ -58,9 +67,11 @@ async function showTaStats(ctx) {
 
   stats.forEach((s, i) => {
     const prefix = `${i + 1}.`;
-    const isMe = myName && s._id?.toLowerCase() === myName;
-    const marker = isMe ? " <b><- Siz</b>" : "";
-    lines.push(`${prefix} ${s._id || "Noma'lum"} - <b>${s.count}</b> ta${marker}`);
+    const rawName = s?._id || "Noma'lum";
+    const safeName = escapeHtml(rawName);
+    const isMe = myName && String(rawName).toLowerCase() === myName;
+    const marker = isMe ? " <b>(&larr; Siz)</b>" : "";
+    lines.push(`${prefix} ${safeName} - <b>${s.count}</b> ta${marker}`);
   });
 
   await ctx.reply(lines.join("\n"), { parse_mode: "HTML", reply_markup: SETTINGS_KEYBOARD.reply_markup });
