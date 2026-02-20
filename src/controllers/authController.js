@@ -197,11 +197,68 @@ const deleteAccount = asyncHandler(async (req, res) => {
   return ok(res, null, "Akkaunt va barcha ma'lumotlar o'chirildi");
 });
 
+// In-memory OTP store (single-curator system)
+let _resetStore = null; // { code, expiresAt }
+
+const forgotPassword = asyncHandler(async (req, res) => {
+  const kurator = await User.findOne({ role: "kurator", isActive: true });
+  if (!kurator) throw new ApiError(404, "Kurator akkaunt topilmadi");
+
+  const telegramId = kurator.telegramId;
+  if (!telegramId) {
+    throw new ApiError(400, "Akkauntga Telegram ID biriktirilmagan");
+  }
+
+  const { getBotInstance } = require("../coddyCheck/bot");
+  const bot = getBotInstance();
+  if (!bot) throw new ApiError(503, "Telegram bot hozirda ishlamayapti");
+
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = Date.now() + 10 * 60 * 1000; // 10 daqiqa
+
+  await bot.telegram.sendMessage(
+    Number(telegramId),
+    `🔐 Parolni tiklash kodi:\n\n*${code}*\n\n⏱ 10 daqiqa ichida amal qiladi.`,
+    { parse_mode: "Markdown" }
+  );
+
+  _resetStore = { code, expiresAt };
+  return ok(res, null, "Kod Telegram botga yuborildi");
+});
+
+const resetPassword = asyncHandler(async (req, res) => {
+  const code = String(req.body.code || "").trim();
+  const newPassword = String(req.body.newPassword || "").trim();
+
+  if (!code) throw new ApiError(400, "Kodni kiriting");
+  if (!newPassword || newPassword.length < 4) {
+    throw new ApiError(400, "Yangi parol kamida 4 ta belgidan iborat bo'lishi kerak");
+  }
+
+  if (!_resetStore) throw new ApiError(400, "Avval kod yuborish so'rovini qiling");
+  if (Date.now() > _resetStore.expiresAt) {
+    _resetStore = null;
+    throw new ApiError(400, "Kod muddati tugagan. Qaytadan urinib ko'ring");
+  }
+  if (code !== _resetStore.code) throw new ApiError(400, "Kod noto'g'ri");
+
+  const kurator = await User.findOne({ role: "kurator", isActive: true }).select("+password");
+  if (!kurator) throw new ApiError(404, "Kurator topilmadi");
+
+  kurator.password = newPassword;
+  await kurator.save();
+
+  _resetStore = null;
+  return ok(res, null, "Parol muvaffaqiyatli yangilandi");
+});
+
 module.exports = {
   register,
   login,
   getMe,
   updateProfile,
   changePassword,
-  deleteAccount
+  deleteAccount,
+  forgotPassword,
+  resetPassword
 };
