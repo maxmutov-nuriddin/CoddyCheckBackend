@@ -186,26 +186,34 @@ async function sendMorningGreetings() {
   const users = await User.find({
     isActive: true,
     telegramId: { $nin: [null, ""] },
-    role: { $in: ["mentor", "ta", "mentor_ta", "kurator"] }
+    role: { $in: ["mentor", "ta", "mentor_ta"] }
   }).lean();
 
-  for (const user of users) {
-    let text;
-    const role = user.role;
+  const timeTag = new Intl.DateTimeFormat("en-GB", {
+    timeZone: env.appTimezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(new Date());
 
-    if (role === "kurator") {
-      text = "☀️ <b>Ishingizga omad!</b>";
-    } else if (role === "ta") {
-      text = "☀️ <b>Ishingizga omad!</b>\nO'quvchilarni yozishni unutmang!";
-    } else {
-      // mentor, mentor_ta
-      text = "☀️ <b>Ishingizga omad!</b>\nAgar o'quvchilaringiz bo'lsa menga yozin.";
+  for (const user of users) {
+    const role = String(user.role || "").toLowerCase();
+    const messages = [];
+
+    if (role === "ta" || role === "mentor_ta") {
+      messages.push(`⏰ ${timeTag}\nO'quvchilarni yozishni unutmang.`);
     }
 
-    try {
-      await sendTelegramMessage({ telegramId: user.telegramId, text });
-    } catch (err) {
-      console.error(`Morning greeting failed for ${user.fullName}:`, err.message);
+    if (role === "mentor" || role === "mentor_ta") {
+      messages.push(`⏰ ${timeTag}\nAgar chaqiradigan o'quvchilaringiz bo'lsa, ayting.`);
+    }
+
+    for (const text of messages) {
+      try {
+        await sendTelegramMessage({ telegramId: user.telegramId, text });
+      } catch (err) {
+        console.error(`Role reminder failed for ${user.fullName}:`, err.message);
+      }
     }
   }
 }
@@ -246,9 +254,9 @@ function startAttendanceJobs() {
     { timezone: env.appTimezone }
   );
 
-  // 09:00 — Ertalabki salom xabarlari
+  // 09:00, 12:00, 20:00 — role bo'yicha eslatmalar
   cron.schedule(
-    "0 9 * * *",
+    "0 9,12,20 * * *",
     async () => {
       await sendMorningGreetings();
     },
