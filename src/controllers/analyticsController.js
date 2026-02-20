@@ -10,11 +10,90 @@ const STAFF_ROLES = ["mentor", "ta", "mentor_ta"];
 const FREEZE_STATUSES = ["frozen", "muzlatilgan", "qarzdor", "qaytadi"];
 const MONTH_UZ = ["Yan", "Fev", "Mar", "Apr", "May", "Iyn", "Iyl", "Avg", "Sen", "Okt", "Noy", "Dek"];
 
+async function buildKuratorExclusion() {
+  const kurators = await User.find({ role: "kurator", isActive: true })
+    .select("_id telegramId")
+    .lean();
+
+  const kuratorUserIds = kurators.map((u) => u._id);
+  const kuratorTelegramIds = Array.from(new Set(
+    kurators.flatMap((u) => {
+      const raw = String(u?.telegramId || "").trim();
+      if (!raw) return [];
+      const asNumber = Number(raw);
+      return Number.isFinite(asNumber) ? [asNumber, raw] : [raw];
+    })
+  ));
+
+  return {
+    attNonKuratorMatch: kuratorUserIds.length
+      ? { mentorId: { $nin: kuratorUserIds }, taId: { $nin: kuratorUserIds } }
+      : {},
+    botNonKuratorMatch: {
+      requesterRole: { $ne: "kurator" },
+      ...(kuratorTelegramIds.length ? { teacherId: { $nin: kuratorTelegramIds } } : {})
+    }
+  };
+}
+
+function normalizeNameKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeName(value) {
+  return normalizeNameKey(value)
+    .replace(/[^a-z0-9'\s]/g, " ")
+    .split(" ")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function scoreNameMatch(workerName, sourceKey) {
+  const a = normalizeNameKey(workerName);
+  const b = normalizeNameKey(sourceKey);
+  if (!a || !b || b === "noma'lum") return -1;
+  if (a === b) return 1000;
+  if (a.startsWith(`${b} `) || b.startsWith(`${a} `)) return 900;
+  if (a.includes(` ${b} `) || b.includes(` ${a} `)) return 800;
+
+  const aTokens = tokenizeName(a);
+  const bTokens = tokenizeName(b);
+  if (!aTokens.length || !bTokens.length) return -1;
+
+  let matched = 0;
+  for (const token of aTokens) {
+    if (bTokens.some((k) => k === token || k.startsWith(token) || token.startsWith(k))) {
+      matched += 1;
+    }
+  }
+
+  if (!matched) return -1;
+  return matched * 100 - Math.abs(aTokens.length - bTokens.length) * 5;
+}
+
+function findBestUnusedKey(workerName, keys, usedKeys) {
+  let bestKey = null;
+  let bestScore = -1;
+
+  for (const key of keys) {
+    if (usedKeys.has(key)) continue;
+    const score = scoreNameMatch(workerName, key);
+    if (score > bestScore) {
+      bestScore = score;
+      bestKey = key;
+    }
+  }
+
+  return bestScore >= 100 ? bestKey : null;
+}
+
 const getAnalytics = asyncHandler(async (req, res) => {
   try {
     const { dateFrom, dateTo } = req.query;
 
-    // ── Build date filters (used by multiple queries below) ───────────────
     const attMatch = {};
     const botMatch = {};
 
@@ -32,17 +111,12 @@ const getAnalytics = asyncHandler(async (req, res) => {
       }
     }
 
-    // sixMonthsAgo is needed for trend queries — computed before Promise.all
     const sixMonthsAgo = new Date();
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
     sixMonthsAgo.setDate(1);
     sixMonthsAgo.setHours(0, 0, 0, 0);
+    const { attNonKuratorMatch, botNonKuratorMatch } = await buildKuratorExclusion();
 
-    // ── Fire ALL 11 independent DB queries concurrently ───────────────────
-    // None of these queries depends on another's result — all filters
-    // are derived from request params and sixMonthsAgo, both set above.
-    // Sequential execution: ~5 async waves × avg 100ms = ~500ms
-    // Parallel execution: max(single slowest query) ≈ 100-150ms
     const [
       workers,
       totalStudents,
@@ -56,15 +130,12 @@ const getAnalytics = asyncHandler(async (req, res) => {
       trendAgg,
       trendBotAgg
     ] = await Promise.all([
-      // 1. Active staff list
       User.find({ role: { $in: STAFF_ROLES }, isActive: true })
         .select("_id fullName role")
         .lean(),
 
-      // 2. Total active students count
       Student.countDocuments({ isActive: true }),
 
-      // 3. Student status distribution
       Student.aggregate([
         { $match: { isActive: true } },
         {
@@ -79,9 +150,8 @@ const getAnalytics = asyncHandler(async (req, res) => {
         }
       ]),
 
-      // 4. Global web attendance totals
       Attendance.aggregate([
-        { $match: attMatch },
+        { $match: { ...attMatch, ...attNonKuratorMatch } },
         {
           $group: {
             _id: null,
@@ -91,21 +161,19 @@ const getAnalytics = asyncHandler(async (req, res) => {
         }
       ]),
 
-      // 5. Global bot attendance totals
       CoddyAttendance.aggregate([
-        { $match: botMatch },
+        { $match: { ...botMatch, ...botNonKuratorMatch, requestType: "mark" } },
         {
           $group: {
             _id: null,
-            invited: { $sum: { $cond: [{ $in: ["$requestType", ["call_extra", "keep"]] }, 1, 0] } },
+            invited: { $sum: 1 },
             attended: { $sum: { $cond: [{ $and: [{ $eq: ["$requestType", "mark"] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
           }
         }
       ]),
 
-      // 6. Per-mentor web attendance
       Attendance.aggregate([
-        { $match: attMatch },
+        { $match: { ...attMatch, ...attNonKuratorMatch } },
         { $lookup: { from: "groups", localField: "groupId", foreignField: "_id", as: "grp" } },
         { $unwind: { path: "$grp", preserveNullAndEmptyArrays: true } },
         {
@@ -117,19 +185,17 @@ const getAnalytics = asyncHandler(async (req, res) => {
         }
       ]),
 
-      // 7. Per-mentor bot attendance
       CoddyAttendance.aggregate([
-        { $match: botMatch },
+        { $match: { ...botMatch, ...botNonKuratorMatch, requestType: "mark" } },
         {
           $group: {
             _id: { $toLower: { $ifNull: ["$mainTeacher", "noma'lum"] } },
-            invited: { $sum: { $cond: [{ $in: ["$requestType", ["call_extra", "keep"]] }, 1, 0] } },
+            invited: { $sum: 1 },
             attended: { $sum: { $cond: [{ $and: [{ $eq: ["$requestType", "mark"] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
           }
         }
       ]),
 
-      // 8. Students grouped by mentor (for quality scores + group lists)
       Student.aggregate([
         { $match: { isActive: true } },
         { $lookup: { from: "groups", localField: "groupId", foreignField: "_id", as: "grp" } },
@@ -148,9 +214,8 @@ const getAnalytics = asyncHandler(async (req, res) => {
         }
       ]),
 
-      // 9. TA entry counts
       CoddyAttendance.aggregate([
-        { $match: { ...botMatch, requestType: "mark" } },
+        { $match: { ...botMatch, ...botNonKuratorMatch, requestType: "mark" } },
         {
           $group: {
             _id: { $toLower: { $ifNull: ["$teacherName", "noma'lum"] } },
@@ -159,9 +224,8 @@ const getAnalytics = asyncHandler(async (req, res) => {
         }
       ]),
 
-      // 10. 6-month attendance trend (web)
       Attendance.aggregate([
-        { $match: { date: { $gte: sixMonthsAgo } } },
+        { $match: { date: { $gte: sixMonthsAgo }, ...attNonKuratorMatch } },
         {
           $group: {
             _id: { month: { $month: "$date" }, year: { $year: "$date" } },
@@ -171,36 +235,44 @@ const getAnalytics = asyncHandler(async (req, res) => {
           }
         },
         { $sort: { "_id.year": 1, "_id.month": 1 } }
-      ]).catch(err => { console.error("trendAgg error:", err); return []; }),
+      ]).catch((err) => {
+        console.error("trendAgg error:", err);
+        return [];
+      }),
 
-      // 11. 6-month attendance trend (bot)
       CoddyAttendance.aggregate([
-        { $match: { requestType: "mark", date: { $gte: formatYMD(sixMonthsAgo) } } },
+        { $match: { requestType: "mark", date: { $gte: formatYMD(sixMonthsAgo) }, ...botNonKuratorMatch } },
         { $addFields: { dateObj: { $dateFromString: { dateString: "$date", onError: new Date(0) } } } },
         {
           $group: {
             _id: { month: { $month: "$dateObj" }, year: { $year: "$dateObj" } },
+            invited: { $sum: 1 },
             attended: { $sum: { $cond: [{ $eq: ["$status", "Keldi"] }, 1, 0] } },
             missed: { $sum: { $cond: [{ $eq: ["$status", "Kelmadi"] }, 1, 0] } }
           }
         },
         { $sort: { "_id.year": 1, "_id.month": 1 } }
-      ]).catch(err => { console.error("trendBotAgg error:", err); return []; })
+      ]).catch((err) => {
+        console.error("trendBotAgg error:", err);
+        return [];
+      })
     ]);
 
-    // ── Process results (identical logic to before, just using resolved vars) ──
-
-    // Status counts
     const statusCounts = statusAggResult.length > 0
-      ? { good: statusAggResult[0].good, average: statusAggResult[0].average, lead: statusAggResult[0].lead, poor: statusAggResult[0].poor, freeze: statusAggResult[0].freeze }
+      ? {
+          good: statusAggResult[0].good,
+          average: statusAggResult[0].average,
+          lead: statusAggResult[0].lead,
+          poor: statusAggResult[0].poor,
+          freeze: statusAggResult[0].freeze
+        }
       : { good: 0, average: 0, lead: 0, poor: 0, freeze: 0 };
 
-    // Global metrics
     const gAtt = globalAttAgg[0] || { invited: 0, attended: 0 };
     const gBot = globalBotAgg[0] || { invited: 0, attended: 0 };
     const totalInvited = gAtt.invited + gBot.invited;
     const totalAttended = gAtt.attended + gBot.attended;
-    const mentorCount = workers.filter(w => ["mentor", "mentor_ta"].includes(w.role)).length;
+    const mentorCount = workers.filter((w) => ["mentor", "mentor_ta"].includes(w.role)).length;
 
     const global = {
       totalMentors: mentorCount,
@@ -210,10 +282,9 @@ const getAnalytics = asyncHandler(async (req, res) => {
       attendancePct: totalInvited > 0 ? Math.min(Math.round((totalAttended / totalInvited) * 100), 100) : 0
     };
 
-    // Per-mentor attendance map (merged web + bot)
     const perMentorAttMap = new Map();
-    perMentorAttAgg.forEach(r => perMentorAttMap.set(r._id, r));
-    perMentorBotAgg.forEach(r => {
+    perMentorAttAgg.forEach((r) => perMentorAttMap.set(r._id, r));
+    perMentorBotAgg.forEach((r) => {
       const existing = perMentorAttMap.get(r._id) || { invited: 0, attended: 0 };
       perMentorAttMap.set(r._id, {
         invited: existing.invited + r.invited,
@@ -221,22 +292,22 @@ const getAnalytics = asyncHandler(async (req, res) => {
       });
     });
 
-    const studentsByMentorMap = new Map(studentsByMentorAgg.map(r => [r._id, r]));
+    const studentsByMentorMap = new Map(studentsByMentorAgg.map((r) => [r._id, r]));
+    const mentorOnly = workers.filter((w) => ["mentor", "mentor_ta"].includes(w.role));
+    const studentKeys = Array.from(studentsByMentorMap.keys()).filter((k) => k && k !== "noma'lum");
+    const attendanceKeys = Array.from(perMentorAttMap.keys()).filter((k) => k && k !== "noma'lum");
+    const usedStudentKeys = new Set();
+    const usedAttendanceKeys = new Set();
 
-    const mentorOnly = workers.filter(w => ["mentor", "mentor_ta"].includes(w.role));
     const mentorRows = mentorOnly.map((worker) => {
-      const nameKey = worker.fullName.toLowerCase();
+      const matchedSdKey = findBestUnusedKey(worker.fullName, studentKeys, usedStudentKeys);
+      if (matchedSdKey) usedStudentKeys.add(matchedSdKey);
+      const sd = matchedSdKey
+        ? studentsByMentorMap.get(matchedSdKey)
+        : { totalStudents: 0, groupList: [], good: 0, average: 0, lead: 0, poor: 0, freeze: 0 };
 
-      const matchedSdKey = Array.from(studentsByMentorMap.keys()).find(k =>
-        k.includes(nameKey) || nameKey.includes(k)
-      );
-      const sd = matchedSdKey ? studentsByMentorMap.get(matchedSdKey) : {
-        totalStudents: 0, groupList: [], good: 0, average: 0, lead: 0, poor: 0, freeze: 0
-      };
-
-      const matchedAdKey = Array.from(perMentorAttMap.keys()).find(k =>
-        k.includes(nameKey) || nameKey.includes(k)
-      );
+      const matchedAdKey = findBestUnusedKey(worker.fullName, attendanceKeys, usedAttendanceKeys);
+      if (matchedAdKey) usedAttendanceKeys.add(matchedAdKey);
       const ad = matchedAdKey ? perMentorAttMap.get(matchedAdKey) : { invited: 0, attended: 0 };
 
       const total = sd.totalStudents;
@@ -262,22 +333,20 @@ const getAnalytics = asyncHandler(async (req, res) => {
       };
     });
 
-    // TA statistics
-    const taEntriesMap = new Map(taEntriesAgg.map(r => [r._id, r.count]));
+    const taEntriesMap = new Map(taEntriesAgg.map((r) => [r._id, r.count]));
     const taRoles = ["ta", "mentor_ta"];
     const taRows = workers
-      .filter(w => taRoles.includes(w.role))
-      .map(worker => {
+      .filter((w) => taRoles.includes(w.role))
+      .map((worker) => {
         const nameKey = worker.fullName.toLowerCase();
-        const matchedKey = Array.from(taEntriesMap.keys()).find(k =>
-          k.includes(nameKey) || nameKey.includes(k)
+        const matchedKey = Array.from(taEntriesMap.keys()).find(
+          (k) => k.includes(nameKey) || nameKey.includes(k)
         );
         const count = matchedKey ? taEntriesMap.get(matchedKey) : 0;
         return { id: worker._id, name: worker.fullName, role: worker.role, entryCount: count };
       })
       .sort((a, b) => b.entryCount - a.entryCount);
 
-    // 6-month trend
     const trendMap = new Map();
     for (let i = 0; i < 6; i++) {
       const d = new Date();
@@ -297,10 +366,12 @@ const getAnalytics = asyncHandler(async (req, res) => {
         existing.missed += r.missed;
       }
     });
+
     trendBotAgg.forEach((r) => {
       const key = `${r._id.year}-${r._id.month}`;
       if (trendMap.has(key)) {
         const existing = trendMap.get(key);
+        existing.invited += r.invited;
         existing.attended += r.attended;
         existing.missed += r.missed;
       }

@@ -2,6 +2,7 @@
 const Student = require("../models/Student");
 const CalledStudent = require("../models/CalledStudent");
 const TaNotificationTask = require("../models/TaNotificationTask");
+const User = require("../models/User");
 const CoddyAttendance = require("../coddyCheck/models/CoddyAttendance");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
@@ -11,6 +12,116 @@ const { updateAttendanceStatus } = require("../services/attendanceService");
 const env = require("../config/env");
 const { loadActiveStaffForMatching, resolveMentorNameFromWorkers } = require("../coddyCheck/utils/mentorNameResolver");
 const { getBotInstance } = require("../coddyCheck/bot");
+
+function toComparableTelegramIds(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return [];
+  const result = new Set([raw]);
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) {
+    result.add(String(asNumber));
+  }
+  return Array.from(result);
+}
+
+async function loadKuratorTelegramIdSet() {
+  const kurators = await User.find({ role: "kurator", isActive: true })
+    .select("telegramId")
+    .lean();
+
+  const set = new Set();
+  for (const item of kurators) {
+    const ids = toComparableTelegramIds(item?.telegramId);
+    ids.forEach((id) => set.add(id));
+  }
+  return set;
+}
+
+function resolveRequesterRole(row, roleByTelegramId) {
+  const explicitRole = String(row?.requesterRole || "").trim().toLowerCase();
+  if (explicitRole) return explicitRole;
+
+  const teacherIds = toComparableTelegramIds(row?.teacherId);
+  for (const id of teacherIds) {
+    const mapped = String(roleByTelegramId.get(id) || "").trim().toLowerCase();
+    if (mapped) return mapped;
+  }
+
+  return "unknown";
+}
+
+function buildRoleByTelegramIdMap(staff) {
+  const map = new Map();
+  (staff || [])
+    .filter((item) => item && item.telegramId)
+    .forEach((item) => {
+      const role = String(item.role || "unknown").toLowerCase();
+      const ids = toComparableTelegramIds(item.telegramId);
+      ids.forEach((id) => map.set(id, role));
+    });
+  return map;
+}
+
+function isKuratorBotRow(row, roleByTelegramId, kuratorTelegramIdSet) {
+  const requesterRole = resolveRequesterRole(row, roleByTelegramId);
+  if (requesterRole === "kurator") return true;
+  const teacherIds = toComparableTelegramIds(row?.teacherId);
+  return teacherIds.some((id) => kuratorTelegramIdSet.has(id));
+}
+
+function isKuratorWebRow(row) {
+  const mentorRole = String(row?.mentorId?.role || "").toLowerCase();
+  const taRole = String(row?.taId?.role || "").toLowerCase();
+  return mentorRole === "kurator" || taRole === "kurator";
+}
+
+function parseTimeMinutes(value) {
+  const text = String(value || "").trim();
+  const m = text.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!m) return -1;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+function choosePreferredActivityRow(existing, candidate) {
+  const existingTime = parseTimeMinutes(existing?.time);
+  const candidateTime = parseTimeMinutes(candidate?.time);
+  if (candidateTime > existingTime) return candidate;
+  if (candidateTime < existingTime) return existing;
+
+  const existingSource = String(existing?.source || "").toLowerCase();
+  const candidateSource = String(candidate?.source || "").toLowerCase();
+  if (candidateSource === "web" && existingSource !== "web") return candidate;
+  if (existingSource === "web" && candidateSource !== "web") return existing;
+
+  const existingUpdated = new Date(existing?.updatedAt || existing?.createdAt || 0).getTime();
+  const candidateUpdated = new Date(candidate?.updatedAt || candidate?.createdAt || 0).getTime();
+  if (candidateUpdated > existingUpdated) return candidate;
+
+  return existing;
+}
+
+function dedupeActivityRows(rows) {
+  const map = new Map();
+
+  rows.forEach((row) => {
+    const key = [
+      String(row?.date || "").trim(),
+      String(row?.student || "").trim().toLowerCase(),
+      String(row?.group || "").trim().toLowerCase(),
+      String(row?.status || "").trim().toLowerCase()
+    ].join("|");
+
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, row);
+      return;
+    }
+
+    map.set(key, choosePreferredActivityRow(existing, row));
+  });
+
+  return Array.from(map.values());
+}
 
 function normalizeDateOnly(dateInput) {
   const date = new Date(dateInput);
@@ -440,11 +551,13 @@ const getCalledList = asyncHandler(async (req, res) => {
   })
     .populate("studentId", "fullName")
     .populate("groupId", "name")
-    .populate("mentorId", "fullName")
+    .populate("mentorId", "fullName role")
+    .populate("taId", "fullName role")
     .sort({ time: 1, createdAt: 1 })
     .lean();
 
-  return ok(res, rows, "Called students list");
+  const filteredRows = rows.filter((row) => !isKuratorWebRow(row));
+  return ok(res, filteredRows, "Called students list");
 });
 
 const getDailyReport = asyncHandler(async (req, res) => {
@@ -461,14 +574,17 @@ const getDailyReport = asyncHandler(async (req, res) => {
   })
     .populate("studentId", "fullName")
     .populate("groupId", "name")
+    .populate("mentorId", "fullName role")
+    .populate("taId", "fullName role")
     .sort({ time: 1, createdAt: 1 })
     .lean();
 
-  const totalCalled = rows.length;
-  const came = rows.filter((row) => row.attendanceStatus === "keldi").length;
-  const didNotCome = rows.filter((row) => row.attendanceStatus === "kelmadi").length;
+  const filteredRows = rows.filter((row) => !isKuratorWebRow(row));
+  const totalCalled = filteredRows.length;
+  const came = filteredRows.filter((row) => row.attendanceStatus === "keldi").length;
+  const didNotCome = filteredRows.filter((row) => row.attendanceStatus === "kelmadi").length;
 
-  const list = rows.map((row) => ({
+  const list = filteredRows.map((row) => ({
     attendanceId: row._id,
     student: row.studentId?.fullName || "Deleted student",
     group: row.groupId?.name || "-",
@@ -507,7 +623,7 @@ const getResults = asyncHandler(async (req, res) => {
     date: { $gte: formatYMD(start), $lte: formatYMD(end) },
     requestType: "mark"
   };
-  const [attendanceRowsRaw, botRowsRaw, staff] = await Promise.all([
+  const [attendanceRowsRaw, botRowsRaw, staff, kuratorTelegramIdSet] = await Promise.all([
     Attendance.find(filter)
       .populate("studentId", "fullName")
       .populate("groupId", "name")
@@ -516,25 +632,14 @@ const getResults = asyncHandler(async (req, res) => {
       .sort({ date: 1, time: 1 })
       .lean(),
     CoddyAttendance.find(botMatch).sort({ date: 1, time: 1 }).lean(),
-    loadActiveStaffForMatching()
+    loadActiveStaffForMatching(),
+    loadKuratorTelegramIdSet()
   ]);
 
-  const roleByTelegramId = new Map(
-    staff
-      .filter((item) => item && item.telegramId)
-      .map((item) => [String(item.telegramId), String(item.role || "unknown").toLowerCase()])
-  );
+  const roleByTelegramId = buildRoleByTelegramIdMap(staff);
 
-  const attendanceRows = attendanceRowsRaw.filter((row) => {
-    const mentorRole = String(row.mentorId?.role || "").toLowerCase();
-    const taRole = String(row.taId?.role || "").toLowerCase();
-    return mentorRole !== "kurator" && taRole !== "kurator";
-  });
-
-  const botRows = botRowsRaw.filter((row) => {
-    const requesterRole = String(row.requesterRole || roleByTelegramId.get(String(row.teacherId || "")) || "").toLowerCase();
-    return requesterRole !== "kurator";
-  });
+  const attendanceRows = attendanceRowsRaw.filter((row) => !isKuratorWebRow(row));
+  const botRows = botRowsRaw.filter((row) => !isKuratorBotRow(row, roleByTelegramId, kuratorTelegramIdSet));
 
   // Merge rows for summary
   const allRows = [
@@ -594,27 +699,26 @@ const getRecentActivity = asyncHandler(async (req, res) => {
     attendanceQuery.date = { $gte: start, $lte: end };
   }
 
-  const [botRows, webRows, staff] = await Promise.all([
+  const [botRows, webRows, staff, kuratorTelegramIdSet] = await Promise.all([
     CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }).lean(),
     Attendance.find(attendanceQuery)
       .populate("studentId", "fullName")
       .populate("groupId", "name")
-      .populate("mentorId", "fullName")
-      .populate("taId", "fullName")
+      .populate("mentorId", "fullName role")
+      .populate("taId", "fullName role")
       .sort({ date: -1, time: -1, createdAt: -1 })
       .lean(),
-    loadActiveStaffForMatching()
+    loadActiveStaffForMatching(),
+    loadKuratorTelegramIdSet()
   ]);
 
   const q = String(search || "").trim().toLowerCase();
 
-  const roleByTelegramId = new Map(
-    staff
-      .filter((item) => item && item.telegramId)
-      .map((item) => [String(item.telegramId), String(item.role || "unknown").toLowerCase()])
-  );
+  const roleByTelegramId = buildRoleByTelegramIdMap(staff);
 
-  const mappedBot = botRows.map((row) => ({
+  const mappedBot = botRows
+    .filter((row) => !isKuratorBotRow(row, roleByTelegramId, kuratorTelegramIdSet))
+    .map((row) => ({
     id: `bot-${row._id}`,
     date: row.date || "-",
     time: row.time || "-",
@@ -626,11 +730,15 @@ const getRecentActivity = asyncHandler(async (req, res) => {
     ta: row.teacherName,
     source: "bot",
     requestType: row.requestType || "mark",
-    requesterRole: row.requesterRole || roleByTelegramId.get(String(row.teacherId || "")) || "unknown",
-    callConfirmed: typeof row.callConfirmed === "boolean" ? row.callConfirmed : String(row.requestType || "").toLowerCase() === "mark"
+    requesterRole: resolveRequesterRole(row, roleByTelegramId),
+    callConfirmed: typeof row.callConfirmed === "boolean" ? row.callConfirmed : String(row.requestType || "").toLowerCase() === "mark",
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
   }));
 
-  const mappedWeb = webRows.map((row) => {
+  const mappedWeb = webRows
+    .filter((row) => !isKuratorWebRow(row))
+    .map((row) => {
     const statusLabel =
       row.attendanceStatus === "keldi"
         ? "Keldi"
@@ -653,11 +761,13 @@ const getRecentActivity = asyncHandler(async (req, res) => {
       source: "web",
       callStatus: row.callStatus || "chaqirilmagan",
       requestType: "web_attendance",
-      requesterRole: "web"
+      requesterRole: "web",
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt
     };
   });
 
-  let mapped = [...mappedWeb, ...mappedBot].filter((row) => {
+  let mapped = dedupeActivityRows([...mappedWeb, ...mappedBot]).filter((row) => {
     if (!q) return true;
     const haystack = [row.student, row.group, row.mentor, row.ta, row.comment, row.status, row.callStatus]
       .map((part) => String(part || "").toLowerCase())
@@ -746,7 +856,7 @@ const getAllActivity = asyncHandler(async (req, res) => {
     attendanceQuery.date = { $gte: start, $lte: end };
   }
 
-  const [botRows, webRows, staff] = await Promise.all([
+  const [botRows, webRows, staff, kuratorTelegramIdSet] = await Promise.all([
     CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }).lean(),
     Attendance.find(attendanceQuery)
       .populate("studentId", "fullName")
@@ -755,38 +865,35 @@ const getAllActivity = asyncHandler(async (req, res) => {
       .populate("taId", "fullName role")
       .sort({ date: -1, time: -1, createdAt: -1 })
       .lean(),
-    loadActiveStaffForMatching()
+    loadActiveStaffForMatching(),
+    loadKuratorTelegramIdSet()
   ]);
 
   const q = String(search || "").trim().toLowerCase();
-  const roleByTelegramId = new Map(
-    staff
-      .filter((item) => item && item.telegramId)
-      .map((item) => [String(item.telegramId), String(item.role || "unknown").toLowerCase()])
-  );
+  const roleByTelegramId = buildRoleByTelegramIdMap(staff);
 
-  const mappedBot = botRows.map((row) => ({
-    id: `bot-${row._id}`,
-    date: row.date || "-",
-    time: row.time || "-",
-    mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
-    group: row.studentGroup,
-    student: row.studentName,
-    status: row.status || "Keldi",
-    comment: row.topic,
-    ta: row.teacherName,
-    source: "bot",
-    requestType: row.requestType || "mark",
-    requesterRole: row.requesterRole || roleByTelegramId.get(String(row.teacherId || "")) || "unknown",
-    callConfirmed: true
-  }));
+  const mappedBot = botRows
+    .filter((row) => !isKuratorBotRow(row, roleByTelegramId, kuratorTelegramIdSet))
+    .map((row) => ({
+      id: `bot-${row._id}`,
+      date: row.date || "-",
+      time: row.time || "-",
+      mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
+      group: row.studentGroup,
+      student: row.studentName,
+      status: row.status || "Keldi",
+      comment: row.topic,
+      ta: row.teacherName,
+      source: "bot",
+      requestType: row.requestType || "mark",
+      requesterRole: resolveRequesterRole(row, roleByTelegramId),
+      callConfirmed: true,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt
+    }));
 
   const mappedWeb = webRows
-    .filter((row) => {
-      const mentorRole = String(row.mentorId?.role || "").toLowerCase();
-      const taRole = String(row.taId?.role || "").toLowerCase();
-      return mentorRole !== "kurator" && taRole !== "kurator";
-    })
+    .filter((row) => !isKuratorWebRow(row))
     .map((row) => {
       const statusLabel =
         row.attendanceStatus === "keldi"
@@ -810,12 +917,13 @@ const getAllActivity = asyncHandler(async (req, res) => {
         source: "web",
         callStatus: row.callStatus || "chaqirilmagan",
         requestType: "web_attendance",
-        requesterRole: "web"
+        requesterRole: "web",
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt
       };
     });
 
-  let mapped = [...mappedWeb, ...mappedBot]
-    .filter((row) => String(row.requesterRole || "").toLowerCase() !== "kurator")
+  let mapped = dedupeActivityRows([...mappedWeb, ...mappedBot])
     .filter((row) => {
       if (!q) return true;
       const haystack = [row.student, row.group, row.mentor, row.ta, row.comment, row.status]
@@ -864,21 +972,20 @@ const getBotCalls = asyncHandler(async (req, res) => {
   const limitRaw = Number(req.query.limit);
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : null;
 
-  const [botRows, staff] = await Promise.all([
+  const [botRows, staff, kuratorTelegramIdSet] = await Promise.all([
     CoddyAttendance.find(coddyQuery)
       .sort({ createdAt: -1 })
       .limit(limit || 0)
       .lean(),
-    loadActiveStaffForMatching()
+    loadActiveStaffForMatching(),
+    loadKuratorTelegramIdSet()
   ]);
 
-  const roleByTelegramId = new Map(
-    staff
-      .filter((item) => item && item.telegramId)
-      .map((item) => [String(item.telegramId), String(item.role || "unknown").toLowerCase()])
-  );
+  const roleByTelegramId = buildRoleByTelegramIdMap(staff);
 
-  let mapped = botRows.map((row) => ({
+  let mapped = botRows
+    .filter((row) => !isKuratorBotRow(row, roleByTelegramId, kuratorTelegramIdSet))
+    .map((row) => ({
     id: `bot-${row._id}`,
     date: row.date || "-",
     time: row.time || "-",
@@ -890,7 +997,7 @@ const getBotCalls = asyncHandler(async (req, res) => {
     ta: row.teacherName,
     source: "bot",
     requestType: row.requestType,
-    requesterRole: row.requesterRole || roleByTelegramId.get(String(row.teacherId || "")) || "unknown",
+    requesterRole: resolveRequesterRole(row, roleByTelegramId),
     callConfirmed: typeof row.callConfirmed === "boolean" ? row.callConfirmed : false
   }));
 
