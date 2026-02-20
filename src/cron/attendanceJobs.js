@@ -182,6 +182,34 @@ async function notifyAbsentCalledStudents() {
   console.log(`Notified ${byMentor.size} mentors about ${absentStudents.length} absent students`);
 }
 
+async function sendMorningGreetings() {
+  const users = await User.find({
+    isActive: true,
+    telegramId: { $nin: [null, ""] },
+    role: { $in: ["mentor", "ta", "mentor_ta", "kurator"] }
+  }).lean();
+
+  for (const user of users) {
+    let text;
+    const role = user.role;
+
+    if (role === "kurator") {
+      text = "☀️ <b>Ishingizga omad!</b>";
+    } else if (role === "ta") {
+      text = "☀️ <b>Ishingizga omad!</b>\nO'quvchilarni yozishni unutmang!";
+    } else {
+      // mentor, mentor_ta
+      text = "☀️ <b>Ishingizga omad!</b>\nAgar o'quvchilaringiz bo'lsa menga yozin.";
+    }
+
+    try {
+      await sendTelegramMessage({ telegramId: user.telegramId, text });
+    } catch (err) {
+      console.error(`Morning greeting failed for ${user.fullName}:`, err.message);
+    }
+  }
+}
+
 function startAttendanceJobs() {
   cron.schedule(
     "0 20 * * *",
@@ -220,6 +248,15 @@ function startAttendanceJobs() {
       const { start, end } = getDayBounds(today);
       const result = await autoCloseUnmarkedAttendances(start, end);
       console.log("23:59 auto check result:", result);
+    },
+    { timezone: env.appTimezone }
+  );
+
+  // 09:00 — Ertalabki salom xabarlari
+  cron.schedule(
+    "0 9 * * *",
+    async () => {
+      await sendMorningGreetings();
     },
     { timezone: env.appTimezone }
   );

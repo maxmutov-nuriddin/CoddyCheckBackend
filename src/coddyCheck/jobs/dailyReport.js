@@ -1,7 +1,8 @@
-﻿const cron = require("node-cron");
+const cron = require("node-cron");
 const { DateTime } = require("luxon");
 const env = require("../../config/env");
 const CoddyAttendance = require("../models/CoddyAttendance");
+const User = require("../../models/User");
 
 let dailyReportTask = null;
 let isSendingReport = false;
@@ -17,6 +18,7 @@ function statusKey(value) {
   return "kutilmoqda";
 }
 
+// ── Admin uchun qisqacha hisobot (avvalgidek) ─────────────────────────────────
 function buildTaSummaryReport(dateStr, records) {
   const statsByTa = new Map();
 
@@ -24,12 +26,7 @@ function buildTaSummaryReport(dateStr, records) {
     const taName = String(row.teacherName || "Noma'lum TA").trim() || "Noma'lum TA";
 
     if (!statsByTa.has(taName)) {
-      statsByTa.set(taName, {
-        total: 0,
-        keldi: 0,
-        kelmadi: 0,
-        kutilmoqda: 0
-      });
+      statsByTa.set(taName, { total: 0, keldi: 0, kelmadi: 0, kutilmoqda: 0 });
     }
 
     const bucket = statsByTa.get(taName);
@@ -59,33 +56,102 @@ function buildTaSummaryReport(dateStr, records) {
   return lines.join("\n");
 }
 
-async function sendDailyReport(bot) {
-  if (isSendingReport) {
-    return;
+// ── Kurator uchun batafsil hisobot ───────────────────────────────────────────
+function buildKuratorDetailedReport(dateStr, records) {
+  const markRecords = records.filter(r => r.requestType === "mark");
+
+  const lines = [
+    `📅 <b>Kunlik hisobot — ${dateStr}</b>`,
+    ""
+  ];
+
+  // Qo'shilgan o'quvchilar ro'yxati
+  if (markRecords.length === 0) {
+    lines.push("📝 Bugun o'quvchi qo'shilmagan.");
+  } else {
+    lines.push(`📝 <b>Bugun qo'shilgan o'quvchilar (${markRecords.length} ta):</b>`);
+    lines.push("");
+    markRecords.forEach((r, idx) => {
+      lines.push(
+        `${idx + 1}. <b>${r.studentName}</b>`,
+        `   TA: ${r.teacherName || "—"}`,
+        `   Vaqt: ${r.time || "--:--"}`,
+        `   Mavzu: ${r.topic || "—"}`,
+        `   Ustoz: ${r.mainTeacher || "—"}`
+      );
+      if (idx < markRecords.length - 1) lines.push("");
+    });
   }
 
+  // TA bo'yicha statistika
+  lines.push("");
+  lines.push("👥 <b>TA bo'yicha statistika:</b>");
+
+  const taCountMap = new Map();
+  markRecords.forEach(r => {
+    const name = r.teacherName || "Noma'lum";
+    taCountMap.set(name, (taCountMap.get(name) || 0) + 1);
+  });
+
+  if (taCountMap.size === 0) {
+    lines.push("— Ma'lumot yo'q");
+  } else {
+    const sorted = [...taCountMap.entries()].sort((a, b) => b[1] - a[1]);
+    sorted.forEach(([name, count], idx) => {
+      lines.push(`${idx + 1}. ${name} — ${count} ta o'quvchi`);
+    });
+  }
+
+  return lines.join("\n");
+}
+
+async function sendKuratorDailyReport(bot, dateStr, records) {
+  const kurators = await User.find({
+    role: "kurator",
+    isActive: true,
+    telegramId: { $nin: [null, ""] }
+  }).lean();
+
+  if (!kurators.length) return;
+
+  const message = buildKuratorDetailedReport(dateStr, records);
+
+  for (const kurator of kurators) {
+    try {
+      await bot.telegram.sendMessage(kurator.telegramId, message, { parse_mode: "HTML" });
+    } catch (err) {
+      console.error(`Failed to send kurator daily report to ${kurator.fullName}:`, err.message);
+    }
+  }
+}
+
+async function sendDailyReport(bot) {
+  if (isSendingReport) return;
   isSendingReport = true;
 
   try {
     const dateStr = DateTime.now().setZone(env.appTimezone).toFormat("yyyy-MM-dd");
     const records = await CoddyAttendance.find({ date: dateStr }).sort({ teacherName: 1, time: 1, createdAt: 1 });
 
+    // Admin uchun qisqacha hisobot (avvalgidek)
     const adminIds = [...new Set((env.coddyAdminIds || []).map(normalizeTelegramId).filter(Boolean))];
-    if (!adminIds.length) {
-      return;
-    }
+    if (adminIds.length) {
+      const adminMessage = records.length
+        ? buildTaSummaryReport(dateStr, records)
+        : `📅 Kunlik hisobot (${dateStr})\n\nMa'lumot yo'q.`;
 
-    const message = records.length
-      ? buildTaSummaryReport(dateStr, records)
-      : `📅 Kunlik hisobot (${dateStr})\n\nMa'lumot yo'q.`;
-
-    for (const adminId of adminIds) {
-      try {
-        await bot.telegram.sendMessage(adminId, message);
-      } catch (error) {
-        console.error(`Failed to send daily TA report to ${adminId}:`, error.message);
+      for (const adminId of adminIds) {
+        try {
+          await bot.telegram.sendMessage(adminId, adminMessage);
+        } catch (error) {
+          console.error(`Failed to send daily TA report to ${adminId}:`, error.message);
+        }
       }
     }
+
+    // Kurator uchun batafsil hisobot
+    await sendKuratorDailyReport(bot, dateStr, records);
+
   } catch (error) {
     console.error("sendDailyReport error:", error);
   } finally {
