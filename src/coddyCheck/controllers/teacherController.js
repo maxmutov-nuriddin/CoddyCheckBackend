@@ -100,8 +100,76 @@ async function editMark(ctx) {
   }
 }
 
+// 1-qadam: tasdiq so'rash
+async function deleteCallRecord(ctx) {
+  try {
+    const recordId = ctx.match[1];
+    const record = await CoddyAttendance.findById(recordId);
+
+    if (!record) {
+      return ctx.answerCbQuery("Yozuv topilmadi");
+    }
+
+    if (String(record.teacherId) !== String(ctx.from.id)) {
+      return ctx.answerCbQuery("Ruxsat yo'q", { show_alert: true });
+    }
+
+    await ctx.answerCbQuery();
+    return ctx.editMessageText(
+      `❓ Rostatan ham o'chirmoqchimisiz?\n\n👤 ${record.studentName} — ${record.studentGroup || "-"} (${record.date || "-"})`,
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback("✅ Ha, o'chirish", `coddy_confirm_del_call_${recordId}`),
+          Markup.button.callback("❌ Yo'q", `coddy_cancel_del_call_${recordId}`)
+        ]
+      ])
+    );
+  } catch (error) {
+    console.error("deleteCallRecord error:", error);
+    return ctx.answerCbQuery("O'chirishda xatolik");
+  }
+}
+
+// 2-qadam: tasdiqlanganda o'chirish
+async function confirmDeleteCallRecord(ctx) {
+  try {
+    const recordId = ctx.match[1];
+    const record = await CoddyAttendance.findById(recordId);
+
+    if (!record) {
+      await ctx.answerCbQuery("Yozuv topilmadi");
+      return ctx.editMessageText("❌ Yozuv allaqachon o'chirilgan.");
+    }
+
+    if (String(record.teacherId) !== String(ctx.from.id)) {
+      return ctx.answerCbQuery("Ruxsat yo'q", { show_alert: true });
+    }
+
+    await CoddyAttendance.findByIdAndDelete(recordId);
+    await ctx.answerCbQuery("O'chirildi ✅");
+    return ctx.editMessageText("✅ Yozuv muvaffaqiyatli o'chirildi.");
+  } catch (error) {
+    console.error("confirmDeleteCallRecord error:", error);
+    return ctx.answerCbQuery("O'chirishda xatolik");
+  }
+}
+
+// 2-qadam: bekor qilish
+async function cancelDeleteCallRecord(ctx) {
+  try {
+    await ctx.answerCbQuery("Bekor qilindi");
+    return ctx.editMessageText("❌ O'chirish bekor qilindi.");
+  } catch (error) {
+    console.error("cancelDeleteCallRecord error:", error);
+    return ctx.answerCbQuery("Xatolik");
+  }
+}
+
 module.exports = {
   listMyMarks,
   deleteMark,
-  editMark
+  editMark,
+  deleteCallRecord,
+  confirmDeleteCallRecord,
+  cancelDeleteCallRecord
 };

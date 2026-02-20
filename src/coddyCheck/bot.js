@@ -195,6 +195,9 @@ async function startCoddyCheckBot() {
 
   coddyBot.action(/^coddy_delete_mark_(.+)$/, teacherController.deleteMark);
   coddyBot.action(/^coddy_edit_mark_(.+)$/, teacherController.editMark);
+  coddyBot.action(/^coddy_delete_call_(.+)$/, teacherController.deleteCallRecord);
+  coddyBot.action(/^coddy_confirm_del_call_(.+)$/, teacherController.confirmDeleteCallRecord);
+  coddyBot.action(/^coddy_cancel_del_call_(.+)$/, teacherController.cancelDeleteCallRecord);
 
   startCoddyDailyReport(coddyBot);
 
