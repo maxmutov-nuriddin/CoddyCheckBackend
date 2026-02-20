@@ -70,7 +70,7 @@ async function showTaStats(ctx) {
     const rawName = s?._id || "Noma'lum";
     const safeName = escapeHtml(rawName);
     const isMe = myName && String(rawName).toLowerCase() === myName;
-    const marker = isMe ? " <b>(&larr; Siz)</b>" : "";
+    const marker = isMe ? " <b>← Siz</b>" : "";
     lines.push(`${prefix} ${safeName} - <b>${s.count}</b> ta${marker}`);
   });
 
