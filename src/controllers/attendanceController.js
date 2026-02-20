@@ -1,5 +1,6 @@
 ﻿const Attendance = require("../models/Attendance");
 const Student = require("../models/Student");
+const CalledStudent = require("../models/CalledStudent");
 const TaNotificationTask = require("../models/TaNotificationTask");
 const CoddyAttendance = require("../coddyCheck/models/CoddyAttendance");
 const ApiError = require("../utils/ApiError");
@@ -802,6 +803,59 @@ const getBotCalls = asyncHandler(async (req, res) => {
   return ok(res, mapped, "Bot calls list");
 });
 
+const createCalledStudent = asyncHandler(async (req, res) => {
+  const { studentId, date, time = "", comment = "" } = req.body;
+
+  if (!studentId || !date) throw new ApiError(400, "studentId and date are required");
+
+  const student = await Student.findById(studentId);
+  if (!student) throw new ApiError(404, "Student not found");
+
+  const normalizedDate = normalizeDateOnly(date);
+  const callEntry = {
+    time: String(time || "").trim(),
+    comment: String(comment || "").trim(),
+    status: "pending",
+    calledAt: new Date()
+  };
+
+  let record = await CalledStudent.findOne({ studentId, date: normalizedDate });
+  if (record) {
+    record.callCount += 1;
+    record.calls.push(callEntry);
+    record.lastStatus = "pending";
+    await record.save();
+    return ok(res, record, "Call record updated");
+  }
+
+  record = await CalledStudent.create({
+    studentId,
+    groupId: student.groupId,
+    date: normalizedDate,
+    callCount: 1,
+    calls: [callEntry],
+    lastStatus: "pending"
+  });
+  return created(res, record, "Call record created");
+});
+
+const getCalledStudents = asyncHandler(async (req, res) => {
+  const date = req.query.date || formatYMD(new Date());
+  const { start, end } = getDayBounds(date);
+
+  const rows = await CalledStudent.find({ date: { $gte: start, $lte: end } })
+    .populate("studentId", "fullName")
+    .populate("groupId", "name")
+    .sort({ createdAt: 1 });
+
+  return ok(res, rows, "Called students list");
+});
+
+const deleteCalledStudent = asyncHandler(async (req, res) => {
+  await CalledStudent.findByIdAndDelete(req.params.id);
+  return ok(res, null, "Record deleted");
+});
+
 module.exports = {
   manualAttendance,
   queueTaNotification,
@@ -817,7 +871,10 @@ module.exports = {
   telegramWebhook,
   deleteActivity,
   getAllActivity,
-  getBotCalls
+  getBotCalls,
+  createCalledStudent,
+  getCalledStudents,
+  deleteCalledStudent
 };
 
 

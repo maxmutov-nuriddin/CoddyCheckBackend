@@ -12,7 +12,10 @@ const {
   getResults,
   getRecentActivity,
   telegramWebhook,
-  deleteActivity
+  deleteActivity,
+  createCalledStudent,
+  getCalledStudents,
+  deleteCalledStudent
 } = require("../controllers/attendanceController");
 const authMiddleware = require("../middlewares/authMiddleware");
 const allowRoles = require("../middlewares/roleMiddleware");
@@ -36,5 +39,8 @@ router.get("/report", getDailyReport);
 router.get("/results", getResults);
 router.get("/recent-activity", getRecentActivity);
 router.delete("/activity/:id", deleteActivity);
+router.post("/called-students", createCalledStudent);
+router.get("/called-students", getCalledStudents);
+router.delete("/called-students/:id", deleteCalledStudent);
 
 module.exports = router;
