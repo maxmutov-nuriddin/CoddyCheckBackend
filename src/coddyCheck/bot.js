@@ -153,12 +153,26 @@ async function startCoddyCheckBot() {
 
   coddyBot.hears("➕ O'quvchi qo'shish", (ctx) => ctx.scene.enter("coddy_attendance_wizard"));
   coddyBot.hears("⚙️ Sozlamalar", (ctx) => ctx.scene.enter("coddy_settings_scene"));
-  coddyBot.hears("ℹ️ Yordam", (ctx) =>
-    ctx.reply(
-      "Mentor uchun: '📣 O'quvchi chaqirish' tugmasi mavjud.\n" +
-      "Assistent (TA) uchun: '➕ O'quvchi qo'shish' tugmasi mavjud."
-    )
-  );
+  coddyBot.hears("ℹ️ Yordam", (ctx) => {
+    const role = String(ctx.state?.worker?.role || "").toLowerCase();
+    let text;
+
+    if (role === "mentor") {
+      text =
+        "📣 O'quvchi chaqirish:\n" +
+        "Darsga kelmagan o'quvchini chaqirish uchun '📣 O'quvchi chaqirish' tugmasini bosing va ko'rsatmalarga amal qiling.\n\n" +
+        "Shikoyat va takliflar uchun: @mv_nuriddin";
+    } else {
+      text =
+        "📣 O'quvchi chaqirish:\n" +
+        "Darsga kelmagan o'quvchini chaqirish uchun '📣 O'quvchi chaqirish' tugmasini bosing va ko'rsatmalarga amal qiling.\n\n" +
+        "➕ O'quvchi qo'shish:\n" +
+        "Kelgan o'quvchini davomatga qo'shish uchun '➕ O'quvchi qo'shish' tugmasini bosing.\n\n" +
+        "Shikoyat va takliflar uchun: @mv_nuriddin";
+    }
+
+    return ctx.reply(text);
+  });
 
   coddyBot.hears("📊 Hisobot", (ctx) => {
     if (!isAdmin(ctx)) return;
