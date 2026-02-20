@@ -104,21 +104,20 @@ const updateWorker = asyncHandler(async (req, res) => {
   return ok(res, toWorkerDto(worker), "Ishchi yangilandi");
 });
 
-const deactivateWorker = asyncHandler(async (req, res) => {
+const deleteWorker = asyncHandler(async (req, res) => {
   const worker = await User.findById(req.params.id);
   if (!worker || worker.role === "kurator") {
     throw new ApiError(404, "Ishchi topilmadi");
   }
 
-  worker.isActive = false;
-  await worker.save();
+  await User.findByIdAndDelete(req.params.id);
 
-  return ok(res, toWorkerDto(worker), "Ishchi nofaol qilindi");
+  return ok(res, null, "Ishchi o'chirildi");
 });
 
 module.exports = {
   listWorkers,
   createWorker,
   updateWorker,
-  deactivateWorker
+  deleteWorker
 };

@@ -5,7 +5,7 @@ const {
   listWorkers,
   createWorker,
   updateWorker,
-  deactivateWorker
+  deleteWorker
 } = require("../controllers/workerController");
 
 const router = express.Router();
@@ -16,6 +16,6 @@ router.use(allowRoles("kurator"));
 router.get("/", listWorkers);
 router.post("/", createWorker);
 router.patch("/:id", updateWorker);
-router.delete("/:id", deactivateWorker);
+router.delete("/:id", deleteWorker);
 
 module.exports = router;
