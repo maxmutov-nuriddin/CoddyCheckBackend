@@ -2,6 +2,9 @@
 const { DateTime } = require("luxon");
 const env = require("../../config/env");
 const CoddyAttendance = require("../models/CoddyAttendance");
+const Attendance = require("../../models/Attendance");
+const Student = require("../../models/Student");
+const CalledStudent = require("../../models/CalledStudent");
 const { getWorkerMainKeyboard } = require("../keyboards");
 const { resolveMentorDisplayName } = require("../utils/mentorNameResolver");
 const { normalizeGroupName } = require("../utils/normalizeGroupName");
@@ -121,6 +124,28 @@ const attendanceScene = new WizardScene(
           { createdAt: { $gte: todayStart, $lte: todayEnd } }
         ]
       });
+      // Also check web/group calls so bot "add" can reconcile them like bot calls.
+      let pendingWebCall = null;
+      if (!pendingCall) {
+        const matchedStudents = await Student.find({
+          fullName: { $regex: new RegExp(`^${studentName}$`, "i") }
+        })
+          .populate("groupId", "name")
+          .lean();
+
+        const matchedStudentIds = matchedStudents
+          .filter((row) => normalizeGroupName(row?.groupId?.name || "") === studentGroup)
+          .map((row) => row._id);
+
+        if (matchedStudentIds.length > 0) {
+          pendingWebCall = await Attendance.findOne({
+            studentId: { $in: matchedStudentIds },
+            date: { $gte: todayStart, $lte: todayEnd },
+            callStatus: "chaqirilgan",
+            attendanceStatus: null
+          }).sort({ createdAt: -1 });
+        }
+      }
 
       if (pendingCall) {
         // Resolve: student arrived after being called — update the call record to Keldi
@@ -175,6 +200,79 @@ const attendanceScene = new WizardScene(
             console.error(`Failed to notify call requester ${pendingCall.teacherId}:`, error.message);
           }
         }
+
+        const notifyText = [
+          "✅ Chaqirilgan o'quvchi keldi",
+          `Support: ${teacherName}`,
+          `O'quvchi: ${studentName}`,
+          `Guruh: ${studentGroup}`,
+          `Asosiy ustoz: ${mainTeacher}`,
+          `Mavzu: ${topic}`,
+          `Sana: ${date} ${time}`
+        ].join("\n");
+
+        for (const adminId of env.coddyAdminIds) {
+          try {
+            await ctx.telegram.sendMessage(adminId, notifyText);
+          } catch (error) {
+            console.error(`Failed to notify admin ${adminId}:`, error.message);
+          }
+        }
+      } else if (pendingWebCall) {
+        pendingWebCall.attendanceStatus = "keldi";
+        pendingWebCall.arrivalConfirmedAt = now.toJSDate();
+        pendingWebCall.botIntegration = true;
+        await pendingWebCall.save();
+
+        const calledRecord = await CalledStudent.findOne({
+          studentId: pendingWebCall.studentId,
+          date: { $gte: todayStart, $lte: todayEnd }
+        }).sort({ createdAt: -1 });
+
+        if (calledRecord) {
+          calledRecord.lastStatus = "keldi";
+          if (Array.isArray(calledRecord.calls) && calledRecord.calls.length > 0) {
+            let updated = false;
+            for (let i = calledRecord.calls.length - 1; i >= 0; i -= 1) {
+              if (calledRecord.calls[i].status === "pending") {
+                calledRecord.calls[i].status = "keldi";
+                updated = true;
+                break;
+              }
+            }
+            if (!updated) {
+              calledRecord.calls[calledRecord.calls.length - 1].status = "keldi";
+            }
+          }
+          await calledRecord.save();
+        }
+
+        await CoddyAttendance.create({
+          teacherId: ctx.from.id,
+          teacherName,
+          studentName,
+          studentGroup,
+          mainTeacher,
+          topic,
+          date,
+          time,
+          status: "Keldi",
+          requesterRole,
+          requestType: "mark",
+          callConfirmed: true
+        });
+
+        await ctx.reply(
+          [
+            "✅ Chaqirilgan o'quvchi keldi:",
+            `O'quvchi: ${studentName}`,
+            `Guruh: ${studentGroup}`,
+            `Asosiy ustoz: ${mainTeacher}`,
+            `Mavzu: ${topic}`,
+            `Vaqt: ${date} ${time}`
+          ].join("\n"),
+          mainKeyboard(ctx)
+        );
 
         const notifyText = [
           "✅ Chaqirilgan o'quvchi keldi",
