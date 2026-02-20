@@ -845,7 +845,7 @@ const getCalledStudents = asyncHandler(async (req, res) => {
 
   const rows = await CalledStudent.find({ date: { $gte: start, $lte: end } })
     .populate("studentId", "fullName")
-    .populate("groupId", "name")
+    .populate("groupId", "name mentor")
     .sort({ createdAt: 1 });
 
   return ok(res, rows, "Called students list");
