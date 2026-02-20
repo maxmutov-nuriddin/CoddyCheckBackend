@@ -76,7 +76,7 @@ function resolveNotifyDate(dateInput) {
 
   const now = new Date();
   const defaultDate = new Date(now);
-  if (now.getHours() >= 8) {
+  if (now.getHours() >= 9) {
     defaultDate.setDate(defaultDate.getDate() + 1);
   }
 
@@ -187,7 +187,7 @@ const queueTaNotification = asyncHandler(async (req, res) => {
     createdBy: req.user._id
   });
 
-  return created(res, task, "TA xabarnomasi 08:00 uchun rejalashtirildi");
+  return created(res, task, "TA xabarnomasi 09:00 uchun rejalashtirildi");
 });
 
 const confirmBotCallRequest = asyncHandler(async (req, res) => {
@@ -762,13 +762,32 @@ const getAllActivity = asyncHandler(async (req, res) => {
 });
 
 const getBotCalls = asyncHandler(async (req, res) => {
-  const { sort = "date-desc" } = req.query;
+  const { sort = "date-desc", date } = req.query;
 
   // Only oquvchi_chaqirish records (call_extra, keep) — NOT shown in So'nggi faollik
   const coddyQuery = { requestType: { $in: ["call_extra", "keep"] } };
 
+  if (date) {
+    const dateStr = formatYMD(date);
+    const { start, end } = getDayBounds(date);
+
+    coddyQuery.$or = [
+      { date: dateStr },
+      {
+        callConfirmed: false,
+        $or: [{ date: { $exists: false } }, { date: null }, { date: "" }],
+        createdAt: { $gte: start, $lte: end }
+      }
+    ];
+  }
+
+  const limitRaw = Number(req.query.limit);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : null;
+
   const [botRows, staff] = await Promise.all([
-    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }),
+    CoddyAttendance.find(coddyQuery)
+      .sort({ createdAt: -1 })
+      .limit(limit || 0),
     loadActiveStaffForMatching()
   ]);
 

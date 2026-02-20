@@ -82,8 +82,8 @@ src/
 
 ## Cron Jobs
 - `0 20 * * *` -> tomorrow called students reminder to TAs
-- `0 8 * * *` -> today called students + inline `Keldi/Kelmadi` buttons
-- `59 23 * * *` -> auto close null attendance:
+- `0 9 * * *` -> today called students + inline `Keldi/Kelmadi` buttons
+- `0 20 * * *` -> auto close null attendance:
   - if `arrivalConfirmedAt` exists => `keldi`
   - otherwise => `kelmadi`
 - `0 20 * * *` (Coddy module) -> daily Coddy bot report to admins + personal support summary

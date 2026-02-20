@@ -80,7 +80,7 @@ async function sendScheduledTaNotifications() {
     });
 
     const lines = [
-      `<b>08:00 eslatma (${formatYMD(task.date)})</b>`,
+      `<b>09:00 eslatma (${formatYMD(task.date)})</b>`,
       `Yo'nalish: ${task.direction.toUpperCase()}`,
       `O'quvchi: ${task.studentName}`,
       task.time ? `Kelish vaqti: ${task.time}` : "",
@@ -214,7 +214,12 @@ function startAttendanceJobs() {
   cron.schedule(
     "0 20 * * *",
     async () => {
-      const tomorrow = addDays(new Date(), 1);
+      const today = new Date();
+      const { start, end } = getDayBounds(today);
+      const autoCloseResult = await autoCloseUnmarkedAttendances(start, end);
+      console.log("20:00 auto check result:", autoCloseResult);
+
+      const tomorrow = addDays(today, 1);
       await sendReminderToTAs({
         dateInput: tomorrow,
         hourTag: "20:00",
@@ -228,26 +233,15 @@ function startAttendanceJobs() {
   );
 
   cron.schedule(
-    "0 8 * * *",
+    "0 9 * * *",
     async () => {
       const today = new Date();
       await sendScheduledTaNotifications();
       await sendReminderToTAs({
         dateInput: today,
-        hourTag: "08:00",
+        hourTag: "09:00",
         includeButtons: true
       });
-    },
-    { timezone: env.appTimezone }
-  );
-
-  cron.schedule(
-    "59 23 * * *",
-    async () => {
-      const today = new Date();
-      const { start, end } = getDayBounds(today);
-      const result = await autoCloseUnmarkedAttendances(start, end);
-      console.log("23:59 auto check result:", result);
     },
     { timezone: env.appTimezone }
   );
