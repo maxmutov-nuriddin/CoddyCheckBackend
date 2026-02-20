@@ -879,34 +879,32 @@ const createCalledStudent = asyncHandler(async (req, res) => {
     calledAt: new Date()
   };
 
-  let record = await CalledStudent.findOne({ studentId, date: normalizedDate });
-  if (record) {
-    record.callCount += 1;
-    record.calls.push(callEntry);
-    record.lastStatus = "pending";
-    await record.save();
-    return ok(res, record, "Call record updated");
-  }
+  const record = await CalledStudent.findOneAndUpdate(
+    { studentId, date: normalizedDate },
+    {
+      $inc: { callCount: 1 },
+      $push: { calls: callEntry },
+      $set: { lastStatus: "pending" },
+      $setOnInsert: { groupId: student.groupId || undefined }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
 
-  record = await CalledStudent.create({
-    studentId,
-    groupId: student.groupId,
-    date: normalizedDate,
-    callCount: 1,
-    calls: [callEntry],
-    lastStatus: "pending"
-  });
-  return created(res, record, "Call record created");
+  return ok(res, record, "Call record saved");
 });
 
 const getCalledStudents = asyncHandler(async (req, res) => {
-  const date = req.query.date || formatYMD(new Date());
-  const { start, end } = getDayBounds(date);
+  const date = req.query.date;
+  let filter = {};
+  if (date) {
+    const { start, end } = getDayBounds(date);
+    filter = { date: { $gte: start, $lte: end } };
+  }
 
-  const rows = await CalledStudent.find({ date: { $gte: start, $lte: end } })
+  const rows = await CalledStudent.find(filter)
     .populate("studentId", "fullName")
     .populate("groupId", "name mentor")
-    .sort({ createdAt: 1 });
+    .sort({ date: -1, createdAt: -1 });
 
   return ok(res, rows, "Called students list");
 });

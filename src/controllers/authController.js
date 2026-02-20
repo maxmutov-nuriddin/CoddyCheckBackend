@@ -1,4 +1,12 @@
 ﻿const User = require("../models/User");
+const Group = require("../models/Group");
+const Student = require("../models/Student");
+const Attendance = require("../models/Attendance");
+const AttendanceStatusLog = require("../models/AttendanceStatusLog");
+const CalledStudent = require("../models/CalledStudent");
+const TaNotificationTask = require("../models/TaNotificationTask");
+const CoddyAttendance = require("../coddyCheck/models/CoddyAttendance");
+const CoddyTeacher = require("../coddyCheck/models/CoddyTeacher");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { created, ok } = require("../utils/response");
@@ -172,8 +180,21 @@ const changePassword = asyncHandler(async (req, res) => {
 });
 
 const deleteAccount = asyncHandler(async (req, res) => {
-  await User.findByIdAndDelete(req.user._id);
-  return ok(res, null, "Akkaunt o'chirildi");
+  // Single-curator system: wipe ALL data from every collection
+  await Promise.all([
+    AttendanceStatusLog.deleteMany({}),
+    Attendance.deleteMany({}),
+    CalledStudent.deleteMany({}),
+    TaNotificationTask.deleteMany({}),
+    CoddyAttendance.deleteMany({}),
+    CoddyTeacher.deleteMany({}),
+  ]);
+
+  await Student.deleteMany({});
+  await Group.deleteMany({});
+  await User.deleteMany({});
+
+  return ok(res, null, "Akkaunt va barcha ma'lumotlar o'chirildi");
 });
 
 module.exports = {

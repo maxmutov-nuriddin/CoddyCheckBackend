@@ -33,7 +33,8 @@ const calledStudentSchema = new mongoose.Schema({
    groupId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Group",
-      required: true
+      required: false,
+      default: null
    },
    date: {
       type: Date,
