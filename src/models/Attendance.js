@@ -61,4 +61,12 @@ const attendanceSchema = new mongoose.Schema(
 
 attendanceSchema.index({ studentId: 1, date: 1 });
 
+// getCalledList / getDailyReport / cron reminder / autoClose:
+// { date: { $gte, $lte }, callStatus: "chaqirilgan" }
+attendanceSchema.index({ date: 1, callStatus: 1 });
+
+// autoCloseUnmarkedAttendances:
+// { date, attendanceStatus: null } and { date, attendanceStatus: null, arrivalConfirmedAt: $ne null }
+attendanceSchema.index({ date: 1, attendanceStatus: 1 });
+
 module.exports = mongoose.model("Attendance", attendanceSchema);

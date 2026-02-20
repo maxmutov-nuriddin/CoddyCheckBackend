@@ -31,7 +31,6 @@ app.post("/api/telegram/coddy", handleCoddyWebhook);
 app.use("/api/auth", authRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/attendance", attendanceRoutes);
-app.use("/api/attendance", attendanceRoutes);
 app.use("/api/workers", workerRoutes);
 app.use("/api/groups", groupRoutes);
 app.use("/api/activity", activityRoutes);

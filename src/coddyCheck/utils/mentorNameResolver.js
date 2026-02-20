@@ -105,8 +105,26 @@ function resolveMentorNameFromWorkers(rawName, workers = []) {
   return best.fullName;
 }
 
+// ── Staff list cache ───────────────────────────────────────────────────
+// Staff changes only on admin add/remove (very rare). Caching for 60s
+// eliminates 3 redundant DB queries per dashboard refresh cycle.
+// Display-only — does NOT affect attendance write paths or bot auth.
+let _staffCache = null;
+let _staffCacheExpiresAt = 0;
+const STAFF_CACHE_TTL_MS = 60_000;
+
 async function loadActiveStaffForMatching() {
-  return User.find({ isActive: true, role: { $in: STAFF_ROLES } }, { fullName: 1, role: 1, telegramId: 1 }).lean();
+  const now = Date.now();
+  if (_staffCache && _staffCacheExpiresAt > now) {
+    return _staffCache;
+  }
+  const staff = await User.find(
+    { isActive: true, role: { $in: STAFF_ROLES } },
+    { fullName: 1, role: 1, telegramId: 1 }
+  ).lean();
+  _staffCache = staff;
+  _staffCacheExpiresAt = now + STAFF_CACHE_TTL_MS;
+  return staff;
 }
 
 async function resolveMentorDisplayName(rawName, workers) {

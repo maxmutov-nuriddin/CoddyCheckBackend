@@ -32,12 +32,13 @@ async function getCalledAttendancesByDate(dateInput) {
   })
     .populate("studentId", "fullName")
     .populate("groupId", "name")
-    .sort({ time: 1, createdAt: 1 });
+    .sort({ time: 1, createdAt: 1 })
+    .lean();
 }
 
 async function sendReminderToTAs({ dateInput, hourTag, includeButtons }) {
   const attendances = await getCalledAttendancesByDate(dateInput);
-  const tas = await User.find({ role: { $in: ["ta", "mentor_ta"] }, isActive: true, telegramId: { $ne: null } });
+  const tas = await User.find({ role: { $in: ["ta", "mentor_ta"] }, isActive: true, telegramId: { $ne: null } }).lean();
 
   if (tas.length === 0 || attendances.length === 0) {
     return;
@@ -71,13 +72,21 @@ async function sendScheduledTaNotifications() {
     date: { $gte: start, $lte: end }
   }).sort({ createdAt: 1 });
 
+  if (tasks.length === 0) return;
+
+  // Load all active TAs once instead of once-per-task (eliminates N+1 query).
+  // In-memory direction filter is behaviourally identical to the DB $or clause:
+  //   { specialization: { $in: [direction, "both"] } } || { specialization: { $exists: false } }
+  const allTas = await User.find({
+    role: { $in: ["ta", "mentor_ta"] },
+    isActive: true,
+    telegramId: { $ne: null }
+  }).lean();
+
   for (const task of tasks) {
-    const tas = await User.find({
-      role: { $in: ["ta", "mentor_ta"] },
-      isActive: true,
-      telegramId: { $ne: null },
-      $or: [{ specialization: { $in: [task.direction, "both"] } }, { specialization: { $exists: false } }]
-    });
+    const tas = allTas.filter(
+      (ta) => !ta.specialization || ta.specialization === task.direction || ta.specialization === "both"
+    );
 
     const lines = [
       `<b>09:00 eslatma (${formatYMD(task.date)})</b>`,

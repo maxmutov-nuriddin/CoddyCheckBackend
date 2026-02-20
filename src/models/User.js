@@ -43,6 +43,11 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Bot auth: findOne({ telegramId, isActive:true, role:$in }) — fires on every bot message
+userSchema.index({ telegramId: 1, isActive: 1, role: 1 });
+// Analytics + cron: User.find({ role:$in, isActive:true }) — fires every 30s refresh
+userSchema.index({ role: 1, isActive: 1 });
+
 userSchema.pre("save", async function hashPassword(next) {
   if (!this.isModified("password")) {
     return next();

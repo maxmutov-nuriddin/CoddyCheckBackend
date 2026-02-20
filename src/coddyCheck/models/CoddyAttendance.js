@@ -70,6 +70,16 @@ const coddyAttendanceSchema = new mongoose.Schema(
 
 coddyAttendanceSchema.index({ teacherId: 1, date: 1 });
 
+// analytics / getBotCalls / getAllActivity:
+// { requestType: "mark", date: $gte } and { requestType: $in["call_extra","keep"] }
+coddyAttendanceSchema.index({ requestType: 1, date: 1 });
+
+// analytics status counts: { requestType, status }
+coddyAttendanceSchema.index({ requestType: 1, status: 1 });
+
+// getRecentActivity unconfirmed pending requests: { callConfirmed: false }
+coddyAttendanceSchema.index({ callConfirmed: 1, createdAt: -1 });
+
 // Unique constraint: one student can only be added once per day via oquvchi_qoshish (mark)
 // Does NOT affect oquvchi_chaqirish (call_extra, keep) records
 coddyAttendanceSchema.index(

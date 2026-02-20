@@ -129,7 +129,7 @@ const manualAttendance = asyncHandler(async (req, res) => {
     throw new ApiError(400, "attendanceStatus must be keldi or kelmadi");
   }
 
-  const student = await Student.findById(studentId);
+  const student = await Student.findById(studentId).lean();
   if (!student) {
     throw new ApiError(404, "Student not found");
   }
@@ -304,7 +304,7 @@ const callStudent = asyncHandler(async (req, res) => {
     throw new ApiError(400, "studentId and date are required");
   }
 
-  const student = await Student.findById(studentId);
+  const student = await Student.findById(studentId).lean();
   if (!student) {
     throw new ApiError(404, "Student not found");
   }
@@ -441,7 +441,8 @@ const getCalledList = asyncHandler(async (req, res) => {
     .populate("studentId", "fullName")
     .populate("groupId", "name")
     .populate("mentorId", "fullName")
-    .sort({ time: 1, createdAt: 1 });
+    .sort({ time: 1, createdAt: 1 })
+    .lean();
 
   return ok(res, rows, "Called students list");
 });
@@ -460,7 +461,8 @@ const getDailyReport = asyncHandler(async (req, res) => {
   })
     .populate("studentId", "fullName")
     .populate("groupId", "name")
-    .sort({ time: 1, createdAt: 1 });
+    .sort({ time: 1, createdAt: 1 })
+    .lean();
 
   const totalCalled = rows.length;
   const came = rows.filter((row) => row.attendanceStatus === "keldi").length;
@@ -504,13 +506,14 @@ const getResults = asyncHandler(async (req, res) => {
   const attendanceRows = await Attendance.find(filter)
     .populate("studentId", "fullName")
     .populate("groupId", "name")
-    .sort({ date: 1, time: 1 });
+    .sort({ date: 1, time: 1 })
+    .lean();
 
   const botMatch = {
     date: { $gte: formatYMD(start), $lte: formatYMD(end) },
     requestType: "mark"
   };
-  const botRows = await CoddyAttendance.find(botMatch).sort({ date: 1, time: 1 });
+  const botRows = await CoddyAttendance.find(botMatch).sort({ date: 1, time: 1 }).lean();
 
   // Merge rows for summary
   const allRows = [
@@ -571,13 +574,14 @@ const getRecentActivity = asyncHandler(async (req, res) => {
   }
 
   const [botRows, webRows, staff] = await Promise.all([
-    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }),
+    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }).lean(),
     Attendance.find(attendanceQuery)
       .populate("studentId", "fullName")
       .populate("groupId", "name")
       .populate("mentorId", "fullName")
       .populate("taId", "fullName")
-      .sort({ date: -1, time: -1, createdAt: -1 }),
+      .sort({ date: -1, time: -1, createdAt: -1 })
+      .lean(),
     loadActiveStaffForMatching()
   ]);
 
@@ -722,13 +726,14 @@ const getAllActivity = asyncHandler(async (req, res) => {
   }
 
   const [botRows, webRows, staff] = await Promise.all([
-    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }),
+    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }).lean(),
     Attendance.find(attendanceQuery)
       .populate("studentId", "fullName")
       .populate("groupId", "name")
       .populate("mentorId", "fullName")
       .populate("taId", "fullName")
-      .sort({ date: -1, time: -1, createdAt: -1 }),
+      .sort({ date: -1, time: -1, createdAt: -1 })
+      .lean(),
     loadActiveStaffForMatching()
   ]);
 
@@ -828,7 +833,8 @@ const getBotCalls = asyncHandler(async (req, res) => {
   const [botRows, staff] = await Promise.all([
     CoddyAttendance.find(coddyQuery)
       .sort({ createdAt: -1 })
-      .limit(limit || 0),
+      .limit(limit || 0)
+      .lean(),
     loadActiveStaffForMatching()
   ]);
 
@@ -868,7 +874,7 @@ const createCalledStudent = asyncHandler(async (req, res) => {
 
   if (!studentId || !date) throw new ApiError(400, "studentId and date are required");
 
-  const student = await Student.findById(studentId);
+  const student = await Student.findById(studentId).lean();
   if (!student) throw new ApiError(404, "Student not found");
 
   const normalizedDate = normalizeDateOnly(date);
@@ -904,7 +910,8 @@ const getCalledStudents = asyncHandler(async (req, res) => {
   const rows = await CalledStudent.find(filter)
     .populate("studentId", "fullName")
     .populate("groupId", "name mentor")
-    .sort({ date: -1, createdAt: -1 });
+    .sort({ date: -1, createdAt: -1 })
+    .lean();
 
   return ok(res, rows, "Called students list");
 });

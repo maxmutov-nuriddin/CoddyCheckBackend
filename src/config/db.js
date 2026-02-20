@@ -7,7 +7,14 @@ async function connectDb() {
   }
 
   await mongoose.connect(env.mongoUri, {
-    autoIndex: true
+    autoIndex: true,
+    // Default pool is 5 — raise to handle concurrent dashboard refreshes
+    // from multiple staff without queuing. Atlas M0 allows 500 total connections.
+    maxPoolSize: 10,
+    // Fail fast if Atlas is unreachable instead of hanging indefinitely
+    serverSelectionTimeoutMS: 5000,
+    // Close idle sockets before Atlas's own 30s server-side timeout
+    socketTimeoutMS: 45000,
   });
 
   console.log("MongoDB connected");

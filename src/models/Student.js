@@ -33,4 +33,9 @@ const studentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// getStudents + analytics countDocuments: { isActive: true } — most-used filter
+studentSchema.index({ isActive: 1 });
+// analytics studentsByMentor aggregate joins groupId then filters isActive
+studentSchema.index({ groupId: 1, isActive: 1 });
+
 module.exports = mongoose.model("Student", studentSchema);

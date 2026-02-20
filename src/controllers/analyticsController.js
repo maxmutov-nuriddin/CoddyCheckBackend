@@ -14,9 +14,9 @@ const getAnalytics = asyncHandler(async (req, res) => {
   try {
     const { dateFrom, dateTo } = req.query;
 
-    // ── 1. Global Metrics ──────────────────────────────────────────────────
+    // ── Build date filters (used by multiple queries below) ───────────────
     const attMatch = {};
-    const botMatch = {}; // Date filter only, internal filtering by requestType
+    const botMatch = {};
 
     if (dateFrom || dateTo) {
       const start = dateFrom ? new Date(dateFrom) : null;
@@ -32,31 +32,54 @@ const getAnalytics = asyncHandler(async (req, res) => {
       }
     }
 
-    // ── 2. Entities & Status Counts ─────────────────────────────────────────
-    const workers = await User.find({ role: { $in: STAFF_ROLES }, isActive: true })
-      .select("_id fullName role")
-      .lean();
+    // sixMonthsAgo is needed for trend queries — computed before Promise.all
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
+    sixMonthsAgo.setDate(1);
+    sixMonthsAgo.setHours(0, 0, 0, 0);
 
-    const totalStudents = await Student.countDocuments({ isActive: true });
+    // ── Fire ALL 11 independent DB queries concurrently ───────────────────
+    // None of these queries depends on another's result — all filters
+    // are derived from request params and sixMonthsAgo, both set above.
+    // Sequential execution: ~5 async waves × avg 100ms = ~500ms
+    // Parallel execution: max(single slowest query) ≈ 100-150ms
+    const [
+      workers,
+      totalStudents,
+      statusAggResult,
+      globalAttAgg,
+      globalBotAgg,
+      perMentorAttAgg,
+      perMentorBotAgg,
+      studentsByMentorAgg,
+      taEntriesAgg,
+      trendAgg,
+      trendBotAgg
+    ] = await Promise.all([
+      // 1. Active staff list
+      User.find({ role: { $in: STAFF_ROLES }, isActive: true })
+        .select("_id fullName role")
+        .lean(),
 
-    const statusAggResult = await Student.aggregate([
-      { $match: { isActive: true } },
-      {
-        $group: {
-          _id: null,
-          good: { $sum: { $cond: [{ $eq: ["$frozenStatus", "good"] }, 1, 0] } },
-          average: { $sum: { $cond: [{ $eq: ["$frozenStatus", "average"] }, 1, 0] } },
-          lead: { $sum: { $cond: [{ $eq: ["$frozenStatus", "lead"] }, 1, 0] } },
-          poor: { $sum: { $cond: [{ $eq: ["$frozenStatus", "poor"] }, 1, 0] } },
-          freeze: { $sum: { $cond: [{ $in: ["$frozenStatus", FREEZE_STATUSES] }, 1, 0] } },
+      // 2. Total active students count
+      Student.countDocuments({ isActive: true }),
+
+      // 3. Student status distribution
+      Student.aggregate([
+        { $match: { isActive: true } },
+        {
+          $group: {
+            _id: null,
+            good: { $sum: { $cond: [{ $eq: ["$frozenStatus", "good"] }, 1, 0] } },
+            average: { $sum: { $cond: [{ $eq: ["$frozenStatus", "average"] }, 1, 0] } },
+            lead: { $sum: { $cond: [{ $eq: ["$frozenStatus", "lead"] }, 1, 0] } },
+            poor: { $sum: { $cond: [{ $eq: ["$frozenStatus", "poor"] }, 1, 0] } },
+            freeze: { $sum: { $cond: [{ $in: ["$frozenStatus", FREEZE_STATUSES] }, 1, 0] } },
+          }
         }
-      }
-    ]);
-    const statusCounts = statusAggResult.length > 0
-      ? { good: statusAggResult[0].good, average: statusAggResult[0].average, lead: statusAggResult[0].lead, poor: statusAggResult[0].poor, freeze: statusAggResult[0].freeze }
-      : { good: 0, average: 0, lead: 0, poor: 0, freeze: 0 };
+      ]),
 
-    const [globalAttAgg, globalBotAgg] = await Promise.all([
+      // 4. Global web attendance totals
       Attendance.aggregate([
         { $match: attMatch },
         {
@@ -67,6 +90,8 @@ const getAnalytics = asyncHandler(async (req, res) => {
           }
         }
       ]),
+
+      // 5. Global bot attendance totals
       CoddyAttendance.aggregate([
         { $match: botMatch },
         {
@@ -76,28 +101,9 @@ const getAnalytics = asyncHandler(async (req, res) => {
             attended: { $sum: { $cond: [{ $and: [{ $eq: ["$requestType", "mark"] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
           }
         }
-      ])
-    ]);
+      ]),
 
-    const gAtt = globalAttAgg[0] || { invited: 0, attended: 0 };
-    const gBot = globalBotAgg[0] || { invited: 0, attended: 0 };
-
-    const totalInvited = gAtt.invited + gBot.invited;
-    const totalAttended = gAtt.attended + gBot.attended;
-
-    const mentorCount = workers.filter(w => ["mentor", "mentor_ta"].includes(w.role)).length;
-
-    const global = {
-      totalMentors: mentorCount,
-      totalStudents,
-      totalInvited,
-      totalAttended,
-      attendancePct: totalInvited > 0 ? Math.min(Math.round((totalAttended / totalInvited) * 100), 100) : 0
-    };
-
-    // ── 3. Per-mentor Metrics ──────────────────────────────────────────────
-    // (via Group.mentor through Attendance.groupId AND CoddyAttendance.mainTeacher)
-    const [perMentorAttAgg, perMentorBotAgg] = await Promise.all([
+      // 6. Per-mentor web attendance
       Attendance.aggregate([
         { $match: attMatch },
         { $lookup: { from: "groups", localField: "groupId", foreignField: "_id", as: "grp" } },
@@ -110,6 +116,8 @@ const getAnalytics = asyncHandler(async (req, res) => {
           }
         }
       ]),
+
+      // 7. Per-mentor bot attendance
       CoddyAttendance.aggregate([
         { $match: botMatch },
         {
@@ -119,9 +127,90 @@ const getAnalytics = asyncHandler(async (req, res) => {
             attended: { $sum: { $cond: [{ $and: [{ $eq: ["$requestType", "mark"] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
           }
         }
-      ])
+      ]),
+
+      // 8. Students grouped by mentor (for quality scores + group lists)
+      Student.aggregate([
+        { $match: { isActive: true } },
+        { $lookup: { from: "groups", localField: "groupId", foreignField: "_id", as: "grp" } },
+        { $unwind: { path: "$grp", preserveNullAndEmptyArrays: true } },
+        {
+          $group: {
+            _id: { $toLower: { $ifNull: ["$grp.mentor", "noma'lum"] } },
+            groupList: { $addToSet: "$grp.name" },
+            totalStudents: { $sum: 1 },
+            good: { $sum: { $cond: [{ $eq: ["$frozenStatus", "good"] }, 1, 0] } },
+            average: { $sum: { $cond: [{ $eq: ["$frozenStatus", "average"] }, 1, 0] } },
+            lead: { $sum: { $cond: [{ $eq: ["$frozenStatus", "lead"] }, 1, 0] } },
+            poor: { $sum: { $cond: [{ $eq: ["$frozenStatus", "poor"] }, 1, 0] } },
+            freeze: { $sum: { $cond: [{ $in: ["$frozenStatus", FREEZE_STATUSES] }, 1, 0] } },
+          }
+        }
+      ]),
+
+      // 9. TA entry counts
+      CoddyAttendance.aggregate([
+        { $match: { ...botMatch, requestType: "mark" } },
+        {
+          $group: {
+            _id: { $toLower: { $ifNull: ["$teacherName", "noma'lum"] } },
+            count: { $sum: 1 }
+          }
+        }
+      ]),
+
+      // 10. 6-month attendance trend (web)
+      Attendance.aggregate([
+        { $match: { date: { $gte: sixMonthsAgo } } },
+        {
+          $group: {
+            _id: { month: { $month: "$date" }, year: { $year: "$date" } },
+            invited: { $sum: { $cond: [{ $eq: ["$callStatus", "chaqirilgan"] }, 1, 0] } },
+            attended: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "kelmadi"] }, 1, 0] } }
+          }
+        },
+        { $sort: { "_id.year": 1, "_id.month": 1 } }
+      ]).catch(err => { console.error("trendAgg error:", err); return []; }),
+
+      // 11. 6-month attendance trend (bot)
+      CoddyAttendance.aggregate([
+        { $match: { requestType: "mark", date: { $gte: formatYMD(sixMonthsAgo) } } },
+        { $addFields: { dateObj: { $dateFromString: { dateString: "$date", onError: new Date(0) } } } },
+        {
+          $group: {
+            _id: { month: { $month: "$dateObj" }, year: { $year: "$dateObj" } },
+            attended: { $sum: { $cond: [{ $eq: ["$status", "Keldi"] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $eq: ["$status", "Kelmadi"] }, 1, 0] } }
+          }
+        },
+        { $sort: { "_id.year": 1, "_id.month": 1 } }
+      ]).catch(err => { console.error("trendBotAgg error:", err); return []; })
     ]);
 
+    // ── Process results (identical logic to before, just using resolved vars) ──
+
+    // Status counts
+    const statusCounts = statusAggResult.length > 0
+      ? { good: statusAggResult[0].good, average: statusAggResult[0].average, lead: statusAggResult[0].lead, poor: statusAggResult[0].poor, freeze: statusAggResult[0].freeze }
+      : { good: 0, average: 0, lead: 0, poor: 0, freeze: 0 };
+
+    // Global metrics
+    const gAtt = globalAttAgg[0] || { invited: 0, attended: 0 };
+    const gBot = globalBotAgg[0] || { invited: 0, attended: 0 };
+    const totalInvited = gAtt.invited + gBot.invited;
+    const totalAttended = gAtt.attended + gBot.attended;
+    const mentorCount = workers.filter(w => ["mentor", "mentor_ta"].includes(w.role)).length;
+
+    const global = {
+      totalMentors: mentorCount,
+      totalStudents,
+      totalInvited,
+      totalAttended,
+      attendancePct: totalInvited > 0 ? Math.min(Math.round((totalAttended / totalInvited) * 100), 100) : 0
+    };
+
+    // Per-mentor attendance map (merged web + bot)
     const perMentorAttMap = new Map();
     perMentorAttAgg.forEach(r => perMentorAttMap.set(r._id, r));
     perMentorBotAgg.forEach(r => {
@@ -132,32 +221,12 @@ const getAnalytics = asyncHandler(async (req, res) => {
       });
     });
 
-    const studentsByMentorAgg = await Student.aggregate([
-      { $match: { isActive: true } },
-      { $lookup: { from: "groups", localField: "groupId", foreignField: "_id", as: "grp" } },
-      { $unwind: { path: "$grp", preserveNullAndEmptyArrays: true } },
-      {
-        $group: {
-          _id: { $toLower: { $ifNull: ["$grp.mentor", "noma'lum"] } },
-          groupList: { $addToSet: "$grp.name" },
-          totalStudents: { $sum: 1 },
-          good: { $sum: { $cond: [{ $eq: ["$frozenStatus", "good"] }, 1, 0] } },
-          average: { $sum: { $cond: [{ $eq: ["$frozenStatus", "average"] }, 1, 0] } },
-          lead: { $sum: { $cond: [{ $eq: ["$frozenStatus", "lead"] }, 1, 0] } },
-          poor: { $sum: { $cond: [{ $eq: ["$frozenStatus", "poor"] }, 1, 0] } },
-          freeze: { $sum: { $cond: [{ $in: ["$frozenStatus", FREEZE_STATUSES] }, 1, 0] } },
-        }
-      }
-    ]);
     const studentsByMentorMap = new Map(studentsByMentorAgg.map(r => [r._id, r]));
 
     const mentorOnly = workers.filter(w => ["mentor", "mentor_ta"].includes(w.role));
-
     const mentorRows = mentorOnly.map((worker) => {
       const nameKey = worker.fullName.toLowerCase();
 
-      // Fuzzy match: Find an entry in the map where either the map key contains the user's name 
-      // or the user's name contains the map key.
       const matchedSdKey = Array.from(studentsByMentorMap.keys()).find(k =>
         k.includes(nameKey) || nameKey.includes(k)
       );
@@ -193,18 +262,8 @@ const getAnalytics = asyncHandler(async (req, res) => {
       };
     });
 
-    // ── 4. TA Statistics (Registration/Marking entries) ────────────────────
-    const taEntriesAgg = await CoddyAttendance.aggregate([
-      { $match: { ...botMatch, requestType: "mark" } },
-      {
-        $group: {
-          _id: { $toLower: { $ifNull: ["$teacherName", "noma'lum"] } },
-          count: { $sum: 1 }
-        }
-      }
-    ]);
+    // TA statistics
     const taEntriesMap = new Map(taEntriesAgg.map(r => [r._id, r.count]));
-
     const taRoles = ["ta", "mentor_ta"];
     const taRows = workers
       .filter(w => taRoles.includes(w.role))
@@ -214,49 +273,11 @@ const getAnalytics = asyncHandler(async (req, res) => {
           k.includes(nameKey) || nameKey.includes(k)
         );
         const count = matchedKey ? taEntriesMap.get(matchedKey) : 0;
-
-        return {
-          id: worker._id,
-          name: worker.fullName,
-          role: worker.role,
-          entryCount: count
-        };
+        return { id: worker._id, name: worker.fullName, role: worker.role, entryCount: count };
       })
       .sort((a, b) => b.entryCount - a.entryCount);
 
-    // ── 5. Trend (6 months) ──────────────────────────────────────────────────
-    const sixMonthsAgo = new Date();
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
-    sixMonthsAgo.setDate(1);
-    sixMonthsAgo.setHours(0, 0, 0, 0);
-
-    const [trendAgg, trendBotAgg] = await Promise.all([
-      Attendance.aggregate([
-        { $match: { date: { $gte: sixMonthsAgo } } },
-        {
-          $group: {
-            _id: { month: { $month: "$date" }, year: { $year: "$date" } },
-            invited: { $sum: { $cond: [{ $eq: ["$callStatus", "chaqirilgan"] }, 1, 0] } },
-            attended: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } },
-            missed: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "kelmadi"] }, 1, 0] } }
-          }
-        },
-        { $sort: { "_id.year": 1, "_id.month": 1 } }
-      ]).catch(err => { console.error("trendAgg error:", err); return []; }),
-      CoddyAttendance.aggregate([
-        { $match: { requestType: "mark", date: { $gte: formatYMD(sixMonthsAgo) } } },
-        { $addFields: { dateObj: { $dateFromString: { dateString: "$date", onError: new Date(0) } } } },
-        {
-          $group: {
-            _id: { month: { $month: "$dateObj" }, year: { $year: "$dateObj" } },
-            attended: { $sum: { $cond: [{ $eq: ["$status", "Keldi"] }, 1, 0] } },
-            missed: { $sum: { $cond: [{ $eq: ["$status", "Kelmadi"] }, 1, 0] } }
-          }
-        },
-        { $sort: { "_id.year": 1, "_id.month": 1 } }
-      ]).catch(err => { console.error("trendBotAgg error:", err); return []; })
-    ]);
-
+    // 6-month trend
     const trendMap = new Map();
     for (let i = 0; i < 6; i++) {
       const d = new Date();
