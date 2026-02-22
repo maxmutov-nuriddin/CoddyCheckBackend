@@ -9,6 +9,15 @@ const env = require("../config/env");
 const { autoCloseUnmarkedAttendances } = require("../services/attendanceService");
 const { loadActiveStaffForMatching, resolveMentorNameFromWorkers } = require("../coddyCheck/utils/mentorNameResolver");
 
+function isSunday() {
+  const now = new Date();
+  const dayStr = new Intl.DateTimeFormat("en-GB", {
+    timeZone: env.appTimezone,
+    weekday: "long"
+  }).format(now);
+  return dayStr === "Sunday";
+}
+
 function attendanceLine(row, idx) {
   const student = row.studentId?.fullName || "Deleted student";
   const group = row.groupId?.name || "-";
@@ -125,6 +134,7 @@ async function collectTodayPlannedEntries(dateInput) {
 }
 
 async function sendMorningTodayExpectedDigest() {
+  if (isSunday()) return { totalEntries: 0, taNotified: 0, mentorNotified: 0 };
   const today = new Date();
   const dateStr = formatYMD(today);
   const plannedEntries = await collectTodayPlannedEntries(today);
@@ -274,6 +284,7 @@ async function getCalledAttendancesByDate(dateInput) {
 }
 
 async function sendReminderToTAs({ dateInput, hourTag, includeButtons }) {
+  if (isSunday()) return;
   const attendances = await getCalledAttendancesByDate(dateInput);
   const tas = await User.find({ role: { $in: ["ta", "mentor_ta"] }, isActive: true, telegramId: { $ne: null } }).lean();
 
@@ -301,6 +312,7 @@ async function sendReminderToTAs({ dateInput, hourTag, includeButtons }) {
 }
 
 async function sendScheduledTaNotifications() {
+  if (isSunday()) return;
   const today = new Date();
   const { start, end } = getDayBounds(today);
 
@@ -352,6 +364,7 @@ async function sendScheduledTaNotifications() {
 }
 
 async function notifyAbsentCalledStudents() {
+  if (isSunday()) return;
   const today = new Date();
   const { start, end } = getDayBounds(today);
 
@@ -429,6 +442,7 @@ async function notifyAbsentCalledStudents() {
 }
 
 async function sendMorningGreetings() {
+  if (isSunday()) return;
   const users = await User.find({
     isActive: true,
     telegramId: { $nin: [null, ""] },
@@ -499,9 +513,9 @@ function startAttendanceJobs() {
     { timezone: env.appTimezone }
   );
 
-  // 09:00, 12:00, 20:00 — role bo'yicha eslatmalar
+  // 09:00, 12:00, 15:00, 20:00 — role bo'yicha eslatmalar
   cron.schedule(
-    "0 9,12,20 * * *",
+    "0 9,12,15,20 * * *",
     async () => {
       await sendMorningGreetings();
     },

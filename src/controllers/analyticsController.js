@@ -3,6 +3,7 @@ const { ok } = require("../utils/response");
 const User = require("../models/User");
 const Student = require("../models/Student");
 const Attendance = require("../models/Attendance");
+const CalledStudent = require("../models/CalledStudent");
 const CoddyAttendance = require("../coddyCheck/models/CoddyAttendance");
 const { formatYMD } = require("../utils/date");
 
@@ -123,12 +124,15 @@ const getAnalytics = asyncHandler(async (req, res) => {
       statusAggResult,
       globalAttAgg,
       globalBotAgg,
+      globalPlatformCallAgg,
       perMentorAttAgg,
       perMentorBotAgg,
+      perMentorPlatformCallAgg,
       studentsByMentorAgg,
       taEntriesAgg,
       trendAgg,
-      trendBotAgg
+      trendBotAgg,
+      trendPlatformCallAgg
     ] = await Promise.all([
       User.find({ role: { $in: STAFF_ROLES }, isActive: true })
         .select("_id fullName role")
@@ -156,18 +160,32 @@ const getAnalytics = asyncHandler(async (req, res) => {
           $group: {
             _id: null,
             invited: { $sum: { $cond: [{ $eq: ["$callStatus", "chaqirilgan"] }, 1, 0] } },
-            attended: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } },
+            invitedAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$callStatus", "chaqirilgan"] }, { $eq: ["$attendanceStatus", "keldi"] }] }, 1, 0] } },
+            totalAttended: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } },
           }
         }
       ]),
 
       CoddyAttendance.aggregate([
-        { $match: { ...botMatch, ...botNonKuratorMatch, requestType: "mark" } },
+        { $match: { ...botMatch, ...botNonKuratorMatch } },
         {
           $group: {
             _id: null,
-            invited: { $sum: 1 },
-            attended: { $sum: { $cond: [{ $and: [{ $eq: ["$requestType", "mark"] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
+            invited: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }] }, 1, 0] } },
+            invitedAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
+            totalAttended: { $sum: { $cond: [{ $eq: ["$status", "Keldi"] }, 1, 0] } },
+          }
+        }
+      ]),
+
+      CalledStudent.aggregate([
+        { $match: attMatch },
+        {
+          $group: {
+            _id: null,
+            invited: { $sum: "$callCount" },
+            invitedAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } },
+            totalAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } }
           }
         }
       ]),
@@ -180,18 +198,34 @@ const getAnalytics = asyncHandler(async (req, res) => {
           $group: {
             _id: { $toLower: { $ifNull: ["$grp.mentor", "noma'lum"] } },
             invited: { $sum: { $cond: [{ $eq: ["$callStatus", "chaqirilgan"] }, 1, 0] } },
-            attended: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } },
+            invitedAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$callStatus", "chaqirilgan"] }, { $eq: ["$attendanceStatus", "keldi"] }] }, 1, 0] } },
+            totalAttended: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } },
           }
         }
       ]),
 
       CoddyAttendance.aggregate([
-        { $match: { ...botMatch, ...botNonKuratorMatch, requestType: "mark" } },
+        { $match: { ...botMatch, ...botNonKuratorMatch } },
         {
           $group: {
             _id: { $toLower: { $ifNull: ["$mainTeacher", "noma'lum"] } },
-            invited: { $sum: 1 },
-            attended: { $sum: { $cond: [{ $and: [{ $eq: ["$requestType", "mark"] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
+            invited: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }] }, 1, 0] } },
+            invitedAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
+            totalAttended: { $sum: { $cond: [{ $eq: ["$status", "Keldi"] }, 1, 0] } },
+          }
+        }
+      ]),
+
+      CalledStudent.aggregate([
+        { $match: attMatch },
+        { $lookup: { from: "groups", localField: "groupId", foreignField: "_id", as: "grp" } },
+        { $unwind: { path: "$grp", preserveNullAndEmptyArrays: true } },
+        {
+          $group: {
+            _id: { $toLower: { $ifNull: ["$grp.mentor", "noma'lum"] } },
+            invited: { $sum: "$callCount" },
+            invitedAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } },
+            totalAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } }
           }
         }
       ]),
@@ -230,8 +264,9 @@ const getAnalytics = asyncHandler(async (req, res) => {
           $group: {
             _id: { month: { $month: "$date" }, year: { $year: "$date" } },
             invited: { $sum: { $cond: [{ $eq: ["$callStatus", "chaqirilgan"] }, 1, 0] } },
-            attended: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } },
-            missed: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "kelmadi"] }, 1, 0] } }
+            invitedAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$callStatus", "chaqirilgan"] }, { $eq: ["$attendanceStatus", "keldi"] }] }, 1, 0] } },
+            totalAttended: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $and: [{ $eq: ["$callStatus", "chaqirilgan"] }, { $eq: ["$attendanceStatus", "kelmadi"] }] }, 1, 0] } }
           }
         },
         { $sort: { "_id.year": 1, "_id.month": 1 } }
@@ -241,37 +276,58 @@ const getAnalytics = asyncHandler(async (req, res) => {
       }),
 
       CoddyAttendance.aggregate([
-        { $match: { requestType: "mark", date: { $gte: formatYMD(sixMonthsAgo) }, ...botNonKuratorMatch } },
+        { $match: { date: { $gte: formatYMD(sixMonthsAgo) }, ...botNonKuratorMatch } },
         { $addFields: { dateObj: { $dateFromString: { dateString: "$date", onError: new Date(0) } } } },
         {
           $group: {
             _id: { month: { $month: "$dateObj" }, year: { $year: "$dateObj" } },
-            invited: { $sum: 1 },
-            attended: { $sum: { $cond: [{ $eq: ["$status", "Keldi"] }, 1, 0] } },
-            missed: { $sum: { $cond: [{ $eq: ["$status", "Kelmadi"] }, 1, 0] } }
+            invited: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }] }, 1, 0] } },
+            invitedAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
+            totalAttended: { $sum: { $cond: [{ $eq: ["$status", "Keldi"] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Kelmadi"] }] }, 1, 0] } }
           }
         },
         { $sort: { "_id.year": 1, "_id.month": 1 } }
       ]).catch((err) => {
         console.error("trendBotAgg error:", err);
         return [];
+      }),
+
+      CalledStudent.aggregate([
+        { $match: { date: { $gte: sixMonthsAgo } } },
+        {
+          $group: {
+            _id: { month: { $month: "$date" }, year: { $year: "$date" } },
+            invited: { $sum: "$callCount" },
+            invitedAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } },
+            totalAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } },
+            missed: { $sum: { $cond: [{ $eq: ["$lastStatus", "kelmadi"] }, 1, 0] } }
+          }
+        },
+        { $sort: { "_id.year": 1, "_id.month": 1 } }
+      ]).catch((err) => {
+        console.error("trendPlatformCallAgg error:", err);
+        return [];
       })
     ]);
 
     const statusCounts = statusAggResult.length > 0
       ? {
-          good: statusAggResult[0].good,
-          average: statusAggResult[0].average,
-          lead: statusAggResult[0].lead,
-          poor: statusAggResult[0].poor,
-          freeze: statusAggResult[0].freeze
-        }
+        good: statusAggResult[0].good,
+        average: statusAggResult[0].average,
+        lead: statusAggResult[0].lead,
+        poor: statusAggResult[0].poor,
+        freeze: statusAggResult[0].freeze
+      }
       : { good: 0, average: 0, lead: 0, poor: 0, freeze: 0 };
 
-    const gAtt = globalAttAgg[0] || { invited: 0, attended: 0 };
-    const gBot = globalBotAgg[0] || { invited: 0, attended: 0 };
-    const totalInvited = gAtt.invited + gBot.invited;
-    const totalAttended = gAtt.attended + gBot.attended;
+    const gAtt = globalAttAgg[0] || { invited: 0, invitedAttended: 0, totalAttended: 0 };
+    const gBot = globalBotAgg[0] || { invited: 0, invitedAttended: 0, totalAttended: 0 };
+    const gPlatform = globalPlatformCallAgg[0] || { invited: 0, invitedAttended: 0, totalAttended: 0 };
+
+    const totalInvited = (gAtt.invited || 0) + (gBot.invited || 0) + (gPlatform.invited || 0);
+    const totalInvitedAttended = (gAtt.invitedAttended || 0) + (gBot.invitedAttended || 0) + (gPlatform.invitedAttended || 0);
+    const totalAttended = (gAtt.totalAttended || 0) + (gBot.totalAttended || 0) + (gPlatform.totalAttended || 0);
     const mentorCount = workers.filter((w) => ["mentor", "mentor_ta"].includes(w.role)).length;
 
     const global = {
@@ -279,16 +335,25 @@ const getAnalytics = asyncHandler(async (req, res) => {
       totalStudents,
       totalInvited,
       totalAttended,
-      attendancePct: totalInvited > 0 ? Math.min(Math.round((totalAttended / totalInvited) * 100), 100) : 0
+      attendancePct: totalInvited > 0 ? Math.min(Math.round((totalInvitedAttended / totalInvited) * 100), 100) : 0
     };
 
     const perMentorAttMap = new Map();
     perMentorAttAgg.forEach((r) => perMentorAttMap.set(r._id, r));
     perMentorBotAgg.forEach((r) => {
-      const existing = perMentorAttMap.get(r._id) || { invited: 0, attended: 0 };
+      const existing = perMentorAttMap.get(r._id) || { invited: 0, invitedAttended: 0, totalAttended: 0 };
       perMentorAttMap.set(r._id, {
-        invited: existing.invited + r.invited,
-        attended: existing.attended + r.attended
+        invited: (existing.invited || 0) + (r.invited || 0),
+        invitedAttended: (existing.invitedAttended || 0) + (r.invitedAttended || 0),
+        totalAttended: (existing.totalAttended || 0) + (r.totalAttended || 0)
+      });
+    });
+    perMentorPlatformCallAgg.forEach((r) => {
+      const existing = perMentorAttMap.get(r._id) || { invited: 0, invitedAttended: 0, totalAttended: 0 };
+      perMentorAttMap.set(r._id, {
+        invited: (existing.invited || 0) + (r.invited || 0),
+        invitedAttended: (existing.invitedAttended || 0) + (r.invitedAttended || 0),
+        totalAttended: (existing.totalAttended || 0) + (r.totalAttended || 0)
       });
     });
 
@@ -308,7 +373,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
 
       const matchedAdKey = findBestUnusedKey(worker.fullName, attendanceKeys, usedAttendanceKeys);
       if (matchedAdKey) usedAttendanceKeys.add(matchedAdKey);
-      const ad = matchedAdKey ? perMentorAttMap.get(matchedAdKey) : { invited: 0, attended: 0 };
+      const ad = matchedAdKey ? perMentorAttMap.get(matchedAdKey) : { invited: 0, invitedAttended: 0, totalAttended: 0 };
 
       const total = sd.totalStudents;
       const qualityScore = total > 0
@@ -322,8 +387,8 @@ const getAnalytics = asyncHandler(async (req, res) => {
         groupList: sd.groupList.slice().sort(),
         totalStudents: total,
         invited: ad.invited,
-        attended: ad.attended,
-        attendancePct: ad.invited > 0 ? Math.min(Math.round((ad.attended / ad.invited) * 100), 100) : 0,
+        attended: ad.totalAttended,
+        attendancePct: ad.invited > 0 ? Math.min(Math.round((ad.invitedAttended / ad.invited) * 100), 100) : 0,
         good: sd.good,
         average: sd.average,
         lead: sd.lead,
@@ -354,16 +419,17 @@ const getAnalytics = asyncHandler(async (req, res) => {
       const m = d.getMonth() + 1;
       const y = d.getFullYear();
       const key = `${y}-${m}`;
-      trendMap.set(key, { name: MONTH_UZ[m - 1], invited: 0, attended: 0, missed: 0 });
+      trendMap.set(key, { name: MONTH_UZ[m - 1], invited: 0, invitedAttended: 0, totalAttended: 0, missed: 0 });
     }
 
     trendAgg.forEach((r) => {
       const key = `${r._id.year}-${r._id.month}`;
       if (trendMap.has(key)) {
         const existing = trendMap.get(key);
-        existing.invited += r.invited;
-        existing.attended += r.attended;
-        existing.missed += r.missed;
+        existing.invited += (r.invited || 0);
+        existing.invitedAttended += (r.invitedAttended || 0);
+        existing.totalAttended += (r.totalAttended || 0);
+        existing.missed += (r.missed || 0);
       }
     });
 
@@ -371,17 +437,29 @@ const getAnalytics = asyncHandler(async (req, res) => {
       const key = `${r._id.year}-${r._id.month}`;
       if (trendMap.has(key)) {
         const existing = trendMap.get(key);
-        existing.invited += r.invited;
-        existing.attended += r.attended;
-        existing.missed += r.missed;
+        existing.invited += (r.invited || 0);
+        existing.invitedAttended += (r.invitedAttended || 0);
+        existing.totalAttended += (r.totalAttended || 0);
+        existing.missed += (r.missed || 0);
+      }
+    });
+
+    trendPlatformCallAgg.forEach((r) => {
+      const key = `${r._id.year}-${r._id.month}`;
+      if (trendMap.has(key)) {
+        const existing = trendMap.get(key);
+        existing.invited += (r.invited || 0);
+        existing.invitedAttended += (r.invitedAttended || 0);
+        existing.totalAttended += (r.totalAttended || 0);
+        existing.missed += (r.missed || 0);
       }
     });
 
     const trend = Array.from(trendMap.values()).map((t) => ({
       month: t.name,
-      attended: t.attended,
+      attended: t.totalAttended,
       missed: t.missed,
-      pct: t.invited > 0 ? Math.min(Math.round((t.attended / t.invited) * 100), 100) : 0
+      pct: t.invited > 0 ? Math.min(Math.round((t.invitedAttended / t.invited) * 100), 100) : 0
     }));
 
     return ok(res, {

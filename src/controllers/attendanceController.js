@@ -24,6 +24,18 @@ function toComparableTelegramIds(value) {
   return Array.from(result);
 }
 
+function formatGroupDisplay(name) {
+  if (!name) return "-";
+  // Add space between letters and numbers
+  let spaced = String(name)
+    .replace(/([a-zA-Z]+)(\d+)/g, "$1 $2")
+    .replace(/(\d+)([a-zA-Z]+)/g, "$1 $2");
+  // Collapse multiple spaces
+  spaced = spaced.replace(/\s+/g, " ").trim();
+  // Capitalize first letter
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 async function loadKuratorTelegramIdSet() {
   const kurators = await User.find({ role: "kurator", isActive: true })
     .select("telegramId")
@@ -375,7 +387,6 @@ const confirmBotCallRequest = asyncHandler(async (req, res) => {
   request.status = "Kutilmoqda";
   request.date = formatYMD(notifyDate);
   request.time = notifyTime || request.time;
-
   if (normalizedComment) {
     request.topic = normalizedComment;
   }
@@ -436,6 +447,7 @@ const callStudent = asyncHandler(async (req, res) => {
     existingWeb.mentorId = req.user._id;
     await existingWeb.save();
     return ok(res, existingWeb, "Attendance call updated");
+
   }
 
   // Duplicate check Bot: Verify if student is already in bot activity for this date
@@ -539,6 +551,7 @@ const recallStudent = asyncHandler(async (req, res) => {
   });
 
   return created(res, newRecord, "Student re-called successfully");
+
 });
 
 const getCalledList = asyncHandler(async (req, res) => {
@@ -615,25 +628,20 @@ const getResults = asyncHandler(async (req, res) => {
   end.setHours(23, 59, 59, 999);
 
   const filter = {
-    date: { $gte: start, $lte: end },
-    callStatus: "chaqirilgan"
+    date: { $gte: start, $lte: end }
   };
 
   const botMatch = {
-    date: { $gte: formatYMD(start), $lte: formatYMD(end) },
-    requestType: "mark"
+    date: { $gte: formatYMD(start), $lte: formatYMD(end) }
   };
-  const [attendanceRowsRaw, botRowsRaw, staff, kuratorTelegramIdSet] = await Promise.all([
-    Attendance.find(filter)
-      .populate("studentId", "fullName")
-      .populate("groupId", "name")
-      .populate("mentorId", "fullName role")
-      .populate("taId", "fullName role")
-      .sort({ date: 1, time: 1 })
-      .lean(),
-    CoddyAttendance.find(botMatch).sort({ date: 1, time: 1 }).lean(),
+
+  const [attendanceRowsRaw, botRowsRaw, platformCallsRaw, staff, kuratorTelegramIdSet, totalActiveStudents] = await Promise.all([
+    Attendance.find(filter).lean(),
+    CoddyAttendance.find(botMatch).lean(),
+    CalledStudent.find(filter).lean(),
     loadActiveStaffForMatching(),
-    loadKuratorTelegramIdSet()
+    loadKuratorTelegramIdSet(),
+    Student.countDocuments({ isActive: true })
   ]);
 
   const roleByTelegramId = buildRoleByTelegramIdMap(staff);
@@ -641,38 +649,54 @@ const getResults = asyncHandler(async (req, res) => {
   const attendanceRows = attendanceRowsRaw.filter((row) => !isKuratorWebRow(row));
   const botRows = botRowsRaw.filter((row) => !isKuratorBotRow(row, roleByTelegramId, kuratorTelegramIdSet));
 
-  // Merge rows for summary
-  const allRows = [
-    ...attendanceRows.map(r => ({
-      date: formatYMD(r.date),
-      status: r.attendanceStatus === "keldi" ? "Keldi" : r.attendanceStatus === "kelmadi" ? "Kelmadi" : "Kutilmoqda"
-    })),
-    ...botRows.map(r => ({
-      date: r.date,
-      status: r.status === "Keldi" ? "Keldi" : r.status === "Kelmadi" ? "Kelmadi" : "Kutilmoqda"
-    }))
-  ];
-
   const resultsMap = new Map();
+  const uniqueArrivedStudents = new Set();
 
-  allRows.forEach(row => {
-    let groupKey = row.date;
+  const processRow = (dateStr, isInvited, isAttended, isMissed, studentId = null) => {
+    let groupKey = dateStr;
     if (groupBy === "week") {
-      const d = new Date(row.date);
+      const d = new Date(dateStr);
       const first = d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1);
       const monday = new Date(d.setDate(first));
       groupKey = `Hafta: ${formatYMD(monday)}`;
     } else if (groupBy === "month") {
-      groupKey = row.date.slice(0, 7); // YYYY-MM
+      groupKey = dateStr.slice(0, 7); // YYYY-MM
     }
 
     if (!resultsMap.has(groupKey)) {
-      resultsMap.set(groupKey, { period: groupKey, total: 0, came: 0, missed: 0 });
+      resultsMap.set(groupKey, { period: groupKey, total: 0, came: 0, invitedCame: 0, missed: 0 });
     }
     const stats = resultsMap.get(groupKey);
-    stats.total += 1;
-    if (row.status === "Keldi") stats.came += 1;
-    if (row.status === "Kelmadi") stats.missed += 1;
+
+    if (isInvited) stats.total = (stats.total || 0) + 1;
+    if (isAttended) {
+      stats.came = (stats.came || 0) + 1;
+      if (studentId) uniqueArrivedStudents.add(String(studentId));
+    }
+    if (isInvited && isAttended) stats.invitedCame = (stats.invitedCame || 0) + 1;
+    if (isInvited && isMissed) stats.missed = (stats.missed || 0) + 1;
+  };
+
+  attendanceRows.forEach(r => {
+    const isInvited = r.callStatus === "chaqirilgan";
+    const isAttended = r.attendanceStatus === "keldi";
+    const isMissed = r.attendanceStatus === "kelmadi";
+    processRow(formatYMD(r.date), isInvited, isAttended, isMissed, r.studentId);
+  });
+
+  botRows.forEach(r => {
+    const isInvited = r.callConfirmed === true && ["call_extra", "keep"].includes(r.requestType);
+    const isAttended = r.status === "Keldi";
+    const isMissed = r.status === "Kelmadi";
+    const studentIdentifier = r.studentId || r.studentName || r.phone;
+    processRow(r.date, isInvited, isAttended, isMissed, studentIdentifier);
+  });
+
+  platformCallsRaw.forEach(r => {
+    const isInvited = true;
+    const isAttended = r.lastStatus === "keldi";
+    const isMissed = r.lastStatus === "kelmadi";
+    processRow(formatYMD(r.date), isInvited, isAttended, isMissed, r.studentId);
   });
 
   const list = Array.from(resultsMap.values()).sort((a, b) => b.period.localeCompare(a.period));
@@ -681,6 +705,8 @@ const getResults = asyncHandler(async (req, res) => {
     dateFrom: formatYMD(start),
     dateTo: formatYMD(end),
     groupBy,
+    totalActiveStudents,
+    uniqueArrivedCount: uniqueArrivedStudents.size,
     list
   }, "Results list");
 });
@@ -719,53 +745,53 @@ const getRecentActivity = asyncHandler(async (req, res) => {
   const mappedBot = botRows
     .filter((row) => !isKuratorBotRow(row, roleByTelegramId, kuratorTelegramIdSet))
     .map((row) => ({
-    id: `bot-${row._id}`,
-    date: row.date || "-",
-    time: row.time || "-",
-    mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
-    group: row.studentGroup,
-    student: row.studentName,
-    status: row.status || "Keldi",
-    comment: row.topic,
-    ta: row.teacherName,
-    source: "bot",
-    requestType: row.requestType || "mark",
-    requesterRole: resolveRequesterRole(row, roleByTelegramId),
-    callConfirmed: typeof row.callConfirmed === "boolean" ? row.callConfirmed : String(row.requestType || "").toLowerCase() === "mark",
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt
-  }));
+      id: `bot-${row._id}`,
+      date: row.date || "-",
+      time: row.time || "-",
+      mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
+      group: row.studentGroup,
+      student: row.studentName,
+      status: row.status || "Keldi",
+      comment: row.topic,
+      ta: row.teacherName,
+      source: "bot",
+      requestType: row.requestType || "mark",
+      requesterRole: resolveRequesterRole(row, roleByTelegramId),
+      callConfirmed: typeof row.callConfirmed === "boolean" ? row.callConfirmed : String(row.requestType || "").toLowerCase() === "mark",
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt
+    }));
 
   const mappedWeb = webRows
     .filter((row) => !isKuratorWebRow(row))
     .map((row) => {
-    const statusLabel =
-      row.attendanceStatus === "keldi"
-        ? "Keldi"
-        : row.attendanceStatus === "kelmadi"
-          ? "Kelmadi"
-          : "Kutilmoqda";
+      const statusLabel =
+        row.attendanceStatus === "keldi"
+          ? "Keldi"
+          : row.attendanceStatus === "kelmadi"
+            ? "Kelmadi"
+            : "Kutilmoqda";
 
-    const timeLabel = row.time ? new Date(row.time).toTimeString().slice(0, 5) : "--:--";
+      const timeLabel = row.time ? new Date(row.time).toTimeString().slice(0, 5) : "--:--";
 
-    return {
-      id: `web-${row._id}`,
-      date: formatYMD(row.date),
-      time: timeLabel,
-      mentor: row.mentorId?.fullName || "-",
-      group: row.groupId?.name || "-",
-      student: row.studentId?.fullName || "Deleted student",
-      status: statusLabel,
-      comment: row.comment || "",
-      ta: row.taId?.fullName || "-",
-      source: "web",
-      callStatus: row.callStatus || "chaqirilmagan",
-      requestType: "web_attendance",
-      requesterRole: "web",
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt
-    };
-  });
+      return {
+        id: `web-${row._id}`,
+        date: formatYMD(row.date),
+        time: timeLabel,
+        mentor: row.mentorId?.fullName || "-",
+        group: row.groupId?.name || "-",
+        student: row.studentId?.fullName || "Deleted student",
+        status: statusLabel,
+        comment: row.comment || "",
+        ta: row.taId?.fullName || "-",
+        source: "web",
+        callStatus: row.callStatus || "chaqirilmagan",
+        requestType: "web_attendance",
+        requesterRole: "web",
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt
+      };
+    });
 
   let mapped = dedupeActivityRows([...mappedWeb, ...mappedBot]).filter((row) => {
     if (!q) return true;
@@ -834,6 +860,24 @@ const deleteActivity = asyncHandler(async (req, res) => {
 
   if (id.startsWith("bot-")) {
     const coddyId = id.slice(4);
+    const request = await CoddyAttendance.findById(coddyId);
+    if (request && request.callConfirmed === false && request.teacherId) {
+      const bot = getBotInstance();
+      if (bot) {
+        const message = [
+          `❌ **So'rovingiz rad etildi**`,
+          ``,
+          `O'quvchi: ${request.studentName}`,
+          `Guruh: ${request.studentGroup}`,
+          ``,
+          `Sizning ushbu o'quvchini chaqirish bo'yicha so'rovingiz Kurator tomonidan rad etildi.`
+        ].join("\n");
+
+        bot.telegram.sendMessage(request.teacherId, message, { parse_mode: "Markdown" }).catch((err) => {
+          console.error(`Failed to notify rejection to ${request.teacherId}:`, err.message);
+        });
+      }
+    }
     await CoddyAttendance.findByIdAndDelete(coddyId);
   } else {
     await Attendance.findByIdAndDelete(id);
@@ -879,7 +923,7 @@ const getAllActivity = asyncHandler(async (req, res) => {
       date: row.date || "-",
       time: row.time || "-",
       mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
-      group: row.studentGroup,
+      group: formatGroupDisplay(row.studentGroup),
       student: row.studentName,
       status: row.status || "Keldi",
       comment: row.topic,
@@ -986,20 +1030,20 @@ const getBotCalls = asyncHandler(async (req, res) => {
   let mapped = botRows
     .filter((row) => !isKuratorBotRow(row, roleByTelegramId, kuratorTelegramIdSet))
     .map((row) => ({
-    id: `bot-${row._id}`,
-    date: row.date || "-",
-    time: row.time || "-",
-    mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
-    group: row.studentGroup,
-    student: row.studentName,
-    status: row.status || "Kutilmoqda",
-    comment: row.topic,
-    ta: row.teacherName,
-    source: "bot",
-    requestType: row.requestType,
-    requesterRole: resolveRequesterRole(row, roleByTelegramId),
-    callConfirmed: typeof row.callConfirmed === "boolean" ? row.callConfirmed : false
-  }));
+      id: `bot-${row._id}`,
+      date: row.date || "-",
+      time: row.time || "-",
+      mentor: resolveMentorNameFromWorkers(row.mainTeacher, staff),
+      group: formatGroupDisplay(row.studentGroup),
+      student: row.studentName,
+      status: row.status || "Kutilmoqda",
+      comment: row.topic,
+      ta: row.teacherName,
+      source: "bot",
+      requestType: row.requestType,
+      requesterRole: resolveRequesterRole(row, roleByTelegramId),
+      callConfirmed: typeof row.callConfirmed === "boolean" ? row.callConfirmed : false
+    }));
 
   if (sort === "date-asc") {
     mapped.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
@@ -1062,6 +1106,76 @@ const deleteCalledStudent = asyncHandler(async (req, res) => {
   return ok(res, null, "Record deleted");
 });
 
+const updateActivity = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { comment, status } = req.body;
+
+  if (id.startsWith("bot-")) {
+    const botId = id.slice(4);
+    const updateData = {};
+    if (typeof comment !== "undefined") updateData.topic = comment;
+    if (typeof status !== "undefined") updateData.status = status;
+
+    const updated = await CoddyAttendance.findByIdAndUpdate(botId, updateData, { new: true });
+    if (!updated) throw new ApiError(404, "Bot activity not found");
+    return ok(res, updated, "Bot activity updated");
+  } else if (id.startsWith("web-")) {
+    const webId = id.slice(4);
+    const updateData = {};
+    if (typeof comment !== "undefined") updateData.comment = comment;
+    if (typeof status !== "undefined") {
+      updateData.attendanceStatus = status === "Kutilmoqda" ? null : status === "Keldi" ? "keldi" : "kelmadi";
+    }
+
+    const updated = await Attendance.findByIdAndUpdate(webId, updateData, { new: true });
+    if (!updated) throw new ApiError(404, "Web activity not found");
+    return ok(res, updated, "Web activity updated");
+  }
+
+  throw new ApiError(400, "Invalid activity ID format");
+});
+
+const updateCalledStudent = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { comment, status } = req.body;
+
+  const record = await CalledStudent.findById(id);
+  if (!record) throw new ApiError(404, "Called student record not found");
+
+  if (typeof status !== "undefined") {
+    record.lastStatus = status === "Kutilmoqda" ? "pending" : status.toLowerCase();
+  }
+
+  if (typeof comment !== "undefined" && record.calls.length > 0) {
+    // Update the comment of the most recent call
+    record.calls[record.calls.length - 1].comment = comment;
+    if (status) {
+      record.calls[record.calls.length - 1].status = status === "Kutilmoqda" ? "pending" : status.toLowerCase();
+    }
+  }
+
+  await record.save();
+
+  // Sync with Attendance model for consistency (AttendancePage / Guruhlar)
+  try {
+    const matchingAttendance = await Attendance.findOne({
+      studentId: record.studentId,
+      date: record.date
+    });
+    if (matchingAttendance) {
+      if (typeof comment !== "undefined") matchingAttendance.comment = comment;
+      if (typeof status !== "undefined") {
+        matchingAttendance.attendanceStatus = (status === "Kutilmoqda" || status === "pending") ? null : status.toLowerCase();
+      }
+      await matchingAttendance.save();
+    }
+  } catch (syncErr) {
+    console.error("Failed to sync CalledStudent update to Attendance:", syncErr.message);
+  }
+
+  return ok(res, record, "Called student record updated");
+});
+
 module.exports = {
   manualAttendance,
   queueTaNotification,
@@ -1080,7 +1194,9 @@ module.exports = {
   getBotCalls,
   createCalledStudent,
   getCalledStudents,
-  deleteCalledStudent
+  deleteCalledStudent,
+  updateActivity,
+  updateCalledStudent
 };
 
 

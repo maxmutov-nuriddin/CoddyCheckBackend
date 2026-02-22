@@ -1,5 +1,7 @@
-﻿const Student = require("../models/Student");
+const Student = require("../models/Student");
 const Group = require("../models/Group");
+const FrozenStudent = require("../models/FrozenStudent");
+const syncFrozenStudent = require("../services/syncFrozenStudent");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { created, ok } = require("../utils/response");
@@ -43,6 +45,9 @@ const createStudent = asyncHandler(async (req, res) => {
     profileUrl
   });
 
+  // Sync with FrozenStudent if created with frozen status
+  await syncFrozenStudent(student);
+
   return created(res, student, "Student created");
 });
 
@@ -71,6 +76,9 @@ const updateStudent = asyncHandler(async (req, res) => {
 
   await student.save();
 
+  // Auto-sync with FrozenStudent collection
+  await syncFrozenStudent(student);
+
   return ok(res, student, "Student updated");
 });
 
@@ -85,22 +93,71 @@ const deleteStudent = asyncHandler(async (req, res) => {
   student.isActive = false;
   await student.save();
 
+  // Clean up any FrozenStudent record for this student
+  await FrozenStudent.deleteOne({ studentId: student._id });
+
   return ok(res, { _id: student._id, isActive: student.isActive }, "Student deactivated");
 });
 
 const getFrozenStudents = asyncHandler(async (req, res) => {
   const { status } = req.query;
 
-  const filter = {
+  // 1. Regular students with explicit frozen statuses (qarzdor / qaytadi / muzlatilgan)
+  const studentFilter = {
     frozenStatus: status || { $in: ["qarzdor", "qaytadi", "muzlatilgan"] },
     isActive: true
   };
 
-  const students = await Student.find(filter)
+  const students = await Student.find(studentFilter)
     .populate("groupId", "name mentor")
     .sort({ updatedAt: -1 });
 
-  return ok(res, students);
+  // 2. Auto-synced students from FrozenStudent collection.
+  //    Only include when no specific status is requested OR it matches "muzlatilgan".
+  const includeSynced = !status || status === "muzlatilgan";
+  let syncedRows = [];
+
+  if (includeSynced) {
+    const frozenRecords = await FrozenStudent.find({}).sort({ updatedAt: -1 });
+
+    if (frozenRecords.length > 0) {
+      // Fetch the actual Student documents in one query
+      const studentIds = frozenRecords.map((fs) => fs.studentId);
+      const refStudents = await Student.find({
+        _id: { $in: studentIds },
+        isActive: true
+      }).populate("groupId", "name mentor");
+
+      // Build a quick lookup map by Student._id string
+      const studentMap = {};
+      for (const s of refStudents) {
+        studentMap[s._id.toString()] = s;
+      }
+
+      for (const fs of frozenRecords) {
+        const ref = studentMap[fs.studentId.toString()];
+        if (!ref) continue; // Student deleted or inactive — skip
+
+        syncedRows.push({
+          _id: ref._id,
+          fullName: fs.fullName,
+          profileUrl: fs.profileLink,
+          frozenStatus: fs.status,       // "muzlatilgan"
+          comment: ref.comment || "",
+          groupId: ref.groupId || null,
+          updatedAt: fs.updatedAt,
+          createdAt: fs.createdAt,
+          isActive: true
+        });
+      }
+    }
+  }
+
+  // Merge and sort by most recently updated
+  const combined = [...students, ...syncedRows];
+  combined.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+  return ok(res, combined);
 });
 
 module.exports = {

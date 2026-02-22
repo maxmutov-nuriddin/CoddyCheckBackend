@@ -7,7 +7,7 @@ const Student = require("../../models/Student");
 const CalledStudent = require("../../models/CalledStudent");
 const { getWorkerMainKeyboard } = require("../keyboards");
 const { resolveMentorDisplayName } = require("../utils/mentorNameResolver");
-const { normalizeGroupName } = require("../utils/normalizeGroupName");
+const { normalizeGroupName, canonicalGroupName } = require("../utils/normalizeGroupName");
 
 const { WizardScene } = Scenes;
 
@@ -134,7 +134,7 @@ const attendanceScene = new WizardScene(
           .lean();
 
         const matchedStudentIds = matchedStudents
-          .filter((row) => normalizeGroupName(row?.groupId?.name || "") === studentGroup)
+          .filter((row) => canonicalGroupName(row?.groupId?.name || "") === canonicalGroupName(studentGroup))
           .map((row) => row._id);
 
         if (matchedStudentIds.length > 0) {

@@ -130,7 +130,9 @@ async function sendDailyReport(bot) {
   isSendingReport = true;
 
   try {
-    const dateStr = DateTime.now().setZone(env.appTimezone).toFormat("yyyy-MM-dd");
+    const now = DateTime.now().setZone(env.appTimezone);
+    if (now.weekday === 7) return; // Skip Sunday
+    const dateStr = now.toFormat("yyyy-MM-dd");
     const records = await CoddyAttendance.find({ date: dateStr }).sort({ teacherName: 1, time: 1, createdAt: 1 });
 
     // Admin uchun qisqacha hisobot (avvalgidek)
