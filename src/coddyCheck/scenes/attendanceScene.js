@@ -261,7 +261,10 @@ const attendanceScene = new WizardScene(
           status: "Keldi",
           requesterRole,
           requestType: "mark",
-          callConfirmed: true
+          callConfirmed: true,
+          // Web Attendance yozuvi allaqachon bor — bu faqat ko'rinish uchun yaratilgan.
+          // Analytics da ikki marta hisoblanmaslik uchun webSync: true.
+          webSync: true
         });
 
         await ctx.reply(

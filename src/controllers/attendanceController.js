@@ -686,17 +686,22 @@ const getResults = asyncHandler(async (req, res) => {
 
   botRows.forEach(r => {
     const isInvited = r.callConfirmed === true && ["call_extra", "keep"].includes(r.requestType);
-    const isAttended = r.status === "Keldi";
-    const isMissed = r.status === "Kelmadi";
+    // Faqat "mark" turidagi yozuvlar kelganlar sifatida hisoblanadi.
+    // call_extra/keep orqali kelganlar Attendance collection da allaqachon hisoblanadi.
+    // webSync:true yozuvlar Attendance collection da allaqachon hisoblanadi — ikki marta sanash oldini olish.
+    const isAttended = r.requestType === "mark" && r.status === "Keldi" && r.webSync !== true;
+    const isMissed = r.requestType === "mark" && r.status === "Kelmadi" && r.webSync !== true;
     const studentIdentifier = r.studentId || r.studentName || r.phone;
     processRow(r.date, isInvited, isAttended, isMissed, studentIdentifier);
   });
 
   platformCallsRaw.forEach(r => {
     const isInvited = true;
-    const isAttended = r.lastStatus === "keldi";
-    const isMissed = r.lastStatus === "kelmadi";
-    processRow(formatYMD(r.date), isInvited, isAttended, isMissed, r.studentId);
+    // CalledStudent orqali kelganlar manualAttendance orqali Attendance da ham saqlanadi,
+    // shuning uchun isAttended = false qilib ikki marta hisoblashni oldini olamiz.
+    const isAttended = false;
+    const isMissed = false;
+    processRow(formatYMD(r.date), isInvited, isAttended, isMissed, null);
   });
 
   const list = Array.from(resultsMap.values()).sort((a, b) => b.period.localeCompare(a.period));

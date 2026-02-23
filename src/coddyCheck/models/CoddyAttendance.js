@@ -63,6 +63,13 @@ const coddyAttendanceSchema = new mongoose.Schema(
     time: {
       type: String,
       required: false
+    },
+    // Web attendance reconciliation flag:
+    // true = bu mark Attendance yozuvini bot bilan bog'lash uchun yaratilgan
+    // (pendingWebCall stsenariyi). Analytics da ikki marta hisoblanmaslik uchun.
+    webSync: {
+      type: Boolean,
+      default: false
     }
   },
   { timestamps: true }

@@ -173,7 +173,8 @@ const getAnalytics = asyncHandler(async (req, res) => {
             _id: null,
             invited: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }] }, 1, 0] } },
             invitedAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
-            totalAttended: { $sum: { $cond: [{ $eq: ["$status", "Keldi"] }, 1, 0] } },
+            // webSync:true yozuvlar Attendance collection da allaqachon hisoblanadi — istisno
+            totalAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$requestType", "mark"] }, { $eq: ["$status", "Keldi"] }, { $ne: ["$webSync", true] }] }, 1, 0] } },
           }
         }
       ]),
@@ -211,7 +212,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
             _id: { $toLower: { $ifNull: ["$mainTeacher", "noma'lum"] } },
             invited: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }] }, 1, 0] } },
             invitedAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
-            totalAttended: { $sum: { $cond: [{ $eq: ["$status", "Keldi"] }, 1, 0] } },
+            totalAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$requestType", "mark"] }, { $eq: ["$status", "Keldi"] }, { $ne: ["$webSync", true] }] }, 1, 0] } },
           }
         }
       ]),
@@ -283,7 +284,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
             _id: { month: { $month: "$dateObj" }, year: { $year: "$dateObj" } },
             invited: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }] }, 1, 0] } },
             invitedAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
-            totalAttended: { $sum: { $cond: [{ $eq: ["$status", "Keldi"] }, 1, 0] } },
+            totalAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$requestType", "mark"] }, { $eq: ["$status", "Keldi"] }, { $ne: ["$webSync", true] }] }, 1, 0] } },
             missed: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Kelmadi"] }] }, 1, 0] } }
           }
         },
@@ -327,7 +328,9 @@ const getAnalytics = asyncHandler(async (req, res) => {
 
     const totalInvited = (gAtt.invited || 0) + (gBot.invited || 0) + (gPlatform.invited || 0);
     const totalInvitedAttended = (gAtt.invitedAttended || 0) + (gBot.invitedAttended || 0) + (gPlatform.invitedAttended || 0);
-    const totalAttended = (gAtt.totalAttended || 0) + (gBot.totalAttended || 0) + (gPlatform.totalAttended || 0);
+    // gPlatform.totalAttended qo'shilmaydi: platformdan chaqirilgan va kelgan o'quvchilar
+    // allaqachon Attendance collection orqali gAtt.totalAttended da hisoblanadi
+    const totalAttended = (gAtt.totalAttended || 0) + (gBot.totalAttended || 0);
     const mentorCount = workers.filter((w) => ["mentor", "mentor_ta"].includes(w.role)).length;
 
     const global = {
@@ -353,7 +356,8 @@ const getAnalytics = asyncHandler(async (req, res) => {
       perMentorAttMap.set(r._id, {
         invited: (existing.invited || 0) + (r.invited || 0),
         invitedAttended: (existing.invitedAttended || 0) + (r.invitedAttended || 0),
-        totalAttended: (existing.totalAttended || 0) + (r.totalAttended || 0)
+        // totalAttended qo'shilmaydi: platform orqali kelganlar Attendance da allaqachon hisoblanadi
+        totalAttended: existing.totalAttended || 0
       });
     });
 
@@ -450,7 +454,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
         const existing = trendMap.get(key);
         existing.invited += (r.invited || 0);
         existing.invitedAttended += (r.invitedAttended || 0);
-        existing.totalAttended += (r.totalAttended || 0);
+        // totalAttended qo'shilmaydi: platform orqali kelganlar Attendance da allaqachon hisoblanadi
         existing.missed += (r.missed || 0);
       }
     });
