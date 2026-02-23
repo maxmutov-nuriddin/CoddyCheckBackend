@@ -652,7 +652,7 @@ const getResults = asyncHandler(async (req, res) => {
   const resultsMap = new Map();
   const uniqueArrivedStudents = new Set();
 
-  const processRow = (dateStr, isInvited, isAttended, isMissed, studentId = null) => {
+  const processRow = (dateStr, isInvited, isAttended, isMissed, studentId = null, isInvitedAttended = false) => {
     let groupKey = dateStr;
     if (groupBy === "week") {
       const d = new Date(dateStr);
@@ -673,7 +673,9 @@ const getResults = asyncHandler(async (req, res) => {
       stats.came = (stats.came || 0) + 1;
       if (studentId) uniqueArrivedStudents.add(String(studentId));
     }
-    if (isInvited && isAttended) stats.invitedCame = (stats.invitedCame || 0) + 1;
+    if (isInvitedAttended || (isInvited && isAttended)) {
+      stats.invitedCame = (stats.invitedCame || 0) + 1;
+    }
     if (isInvited && isMissed) stats.missed = (stats.missed || 0) + 1;
   };
 
@@ -685,14 +687,17 @@ const getResults = asyncHandler(async (req, res) => {
   });
 
   botRows.forEach(r => {
-    const isInvited = r.callConfirmed === true && ["call_extra", "keep"].includes(r.requestType);
-    // Faqat "mark" turidagi yozuvlar kelganlar sifatida hisoblanadi.
-    // call_extra/keep orqali kelganlar Attendance collection da allaqachon hisoblanadi.
-    // webSync:true yozuvlar Attendance collection da allaqachon hisoblanadi — ikki marta sanash oldini olish.
-    const isAttended = r.requestType === "mark" && r.status === "Keldi" && r.webSync !== true;
-    const isMissed = r.requestType === "mark" && r.status === "Kelmadi" && r.webSync !== true;
+    const requestType = String(r.requestType || "").toLowerCase();
+    const status = String(r.status || "");
+    const isCallRequest = ["call_extra", "keep"].includes(requestType);
+    const isInvited = r.callConfirmed === true && isCallRequest;
+    // Faqat mark yozuvlari "Kelganlar" soniga qo'shiladi (webSync bo'lmaganlari).
+    const isAttended = requestType === "mark" && status === "Keldi" && r.webSync !== true;
+    // Chaqirilganlar ichida kelmaganlar call request statusidan olinadi.
+    const isMissed = isInvited && status === "Kelmadi";
+    const isInvitedAttended = isInvited && status === "Keldi";
     const studentIdentifier = r.studentId || r.studentName || r.phone;
-    processRow(r.date, isInvited, isAttended, isMissed, studentIdentifier);
+    processRow(r.date, isInvited, isAttended, isMissed, studentIdentifier, isInvitedAttended);
   });
 
   platformCallsRaw.forEach(r => {
