@@ -54,5 +54,7 @@ const calledStudentSchema = new mongoose.Schema({
 
 // Ensure one record per student per day
 calledStudentSchema.index({ studentId: 1, date: 1 }, { unique: true });
+// Guruhlar page called counters: date-filtered list (daily)
+calledStudentSchema.index({ date: -1, createdAt: -1 });
 
 module.exports = mongoose.model("CalledStudent", calledStudentSchema);

@@ -7,7 +7,8 @@ const asyncHandler = require("../utils/asyncHandler");
 const { created, ok } = require("../utils/response");
 
 const getStudents = asyncHandler(async (req, res) => {
-  const { groupId, search, isActive } = req.query;
+  const { groupId, search, isActive, lite } = req.query;
+  const liteMode = String(lite || "").toLowerCase();
 
   const filter = {};
   if (groupId) filter.groupId = groupId;
@@ -16,9 +17,21 @@ const getStudents = asyncHandler(async (req, res) => {
     filter.fullName = { $regex: search, $options: "i" };
   }
 
-  const students = await Student.find(filter)
-    .populate("groupId", "name mentor")
-    .sort({ createdAt: -1 });
+  let query = Student.find(filter);
+
+  if (liteMode === "attendance") {
+    query = query
+      .select("_id fullName groupId frozenStatus comment profileUrl isActive")
+      .sort({ groupId: 1, fullName: 1 })
+      .lean();
+  } else {
+    query = query
+      .populate("groupId", "name mentor")
+      .sort({ createdAt: -1 })
+      .lean();
+  }
+
+  const students = await query;
 
   return ok(res, students);
 });

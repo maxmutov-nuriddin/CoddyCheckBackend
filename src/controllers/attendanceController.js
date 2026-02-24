@@ -188,6 +188,20 @@ function normalizeOptionalTime(input) {
   return value;
 }
 
+function parseObjectIdCsv(input, maxItems = 2000) {
+  const items = String(input || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => /^[a-f\d]{24}$/i.test(part));
+
+  if (!items.length) return [];
+  return Array.from(new Set(items)).slice(0, maxItems);
+}
+
+function isAttendanceLiteRequest(req) {
+  return String(req?.query?.lite || "").toLowerCase() === "attendance";
+}
+
 function resolveNotifyDate(dateInput) {
   if (dateInput) {
     const selected = normalizeDateOnly(dateInput);
@@ -1124,18 +1138,27 @@ const createStudentTalk = asyncHandler(async (req, res) => {
 });
 
 const getStudentTalks = asyncHandler(async (req, res) => {
-  const { studentId } = req.query;
+  const { studentId, studentIds } = req.query;
   const filter = {};
+  const parsedStudentIds = parseObjectIdCsv(studentIds);
+  const liteMode = isAttendanceLiteRequest(req);
 
   if (studentId) {
     filter.studentId = studentId;
+  } else if (parsedStudentIds.length > 0) {
+    filter.studentId = { $in: parsedStudentIds };
   }
 
-  const rows = await StudentTalk.find(filter)
+  let query = StudentTalk.find(filter)
     .populate("studentId", "fullName")
-    .populate("groupId", "name mentor")
     .sort({ updatedAt: -1, createdAt: -1 })
     .lean();
+
+  if (!liteMode) {
+    query = query.populate("groupId", "name mentor");
+  }
+
+  const rows = await query;
 
   const normalizedRows = rows.map((row) => {
     const talks = Array.isArray(row.talks) ? row.talks.slice() : [];
@@ -1160,17 +1183,27 @@ const getStudentTalks = asyncHandler(async (req, res) => {
 
 const getCalledStudents = asyncHandler(async (req, res) => {
   const date = req.query.date;
+  const studentIds = parseObjectIdCsv(req.query.studentIds);
+  const liteMode = isAttendanceLiteRequest(req);
   let filter = {};
   if (date) {
     const { start, end } = getDayBounds(date);
     filter = { date: { $gte: start, $lte: end } };
   }
+  if (studentIds.length > 0) {
+    filter.studentId = { $in: studentIds };
+  }
 
-  const rows = await CalledStudent.find(filter)
+  let query = CalledStudent.find(filter)
     .populate("studentId", "fullName")
-    .populate("groupId", "name mentor")
     .sort({ date: -1, createdAt: -1 })
     .lean();
+
+  if (!liteMode) {
+    query = query.populate("groupId", "name mentor");
+  }
+
+  const rows = await query;
 
   return ok(res, rows, "Called students list");
 });
