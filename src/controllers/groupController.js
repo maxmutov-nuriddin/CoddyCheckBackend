@@ -34,10 +34,11 @@ function sanitizeProfileUrl(value) {
 }
 
 function mapIncomingStatus(value) {
-   const normalized = String(value || "").trim().toLowerCase();
-   if (!normalized || normalized === "active") return "good";
-   if (ALLOWED_STATUSES.has(normalized)) return normalized;
-   return "good";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "active") return "good";
+  if (normalized === "frozen" || normalized === "muzlatilgan") return "muzlatilgan";
+  if (ALLOWED_STATUSES.has(normalized)) return normalized;
+  return "good";
 }
 
 const getGroups = asyncHandler(async (req, res) => {

@@ -102,15 +102,33 @@ const deleteStudent = asyncHandler(async (req, res) => {
 const getFrozenStudents = asyncHandler(async (req, res) => {
   const { status } = req.query;
 
-  // 1. Regular students with explicit frozen statuses (qarzdor / qaytadi / muzlatilgan)
+  // 1. Regular students with explicit frozen statuses
+  // Backward compatibility: old rows may store "frozen" instead of "muzlatilgan".
+  let statusFilter;
+  if (!status) {
+    statusFilter = { $in: ["qarzdor", "qaytadi", "muzlatilgan", "frozen"] };
+  } else if (status === "muzlatilgan") {
+    statusFilter = { $in: ["muzlatilgan", "frozen"] };
+  } else {
+    statusFilter = status;
+  }
+
   const studentFilter = {
-    frozenStatus: status || { $in: ["qarzdor", "qaytadi", "muzlatilgan"] },
+    frozenStatus: statusFilter,
     isActive: true
   };
 
-  const students = await Student.find(studentFilter)
+  const rawStudents = await Student.find(studentFilter)
     .populate("groupId", "name mentor")
     .sort({ updatedAt: -1 });
+
+  const students = rawStudents.map((row) => {
+    const plain = row.toObject ? row.toObject() : row;
+    if (plain.frozenStatus === "frozen") {
+      plain.frozenStatus = "muzlatilgan";
+    }
+    return plain;
+  });
 
   // 2. Auto-synced students from FrozenStudent collection.
   //    Only include when no specific status is requested OR it matches "muzlatilgan".
@@ -153,8 +171,23 @@ const getFrozenStudents = asyncHandler(async (req, res) => {
     }
   }
 
-  // Merge and sort by most recently updated
-  const combined = [...students, ...syncedRows];
+  // Merge + dedupe by student id, then sort by most recently updated.
+  const dedupedMap = new Map();
+  [...students, ...syncedRows].forEach((row) => {
+    const key = String(row?._id || "");
+    if (!key) return;
+    const prev = dedupedMap.get(key);
+    if (!prev) {
+      dedupedMap.set(key, row);
+      return;
+    }
+
+    const prevTime = new Date(prev.updatedAt || 0).getTime();
+    const nextTime = new Date(row.updatedAt || 0).getTime();
+    dedupedMap.set(key, nextTime >= prevTime ? row : prev);
+  });
+
+  const combined = Array.from(dedupedMap.values());
   combined.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 
   return ok(res, combined);
