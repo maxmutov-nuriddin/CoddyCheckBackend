@@ -11,6 +11,17 @@ function normalizeTelegramId(value) {
   return String(value || "").trim();
 }
 
+function toComparableTelegramIds(value) {
+  const raw = normalizeTelegramId(value);
+  if (!raw) return [];
+  const set = new Set([raw]);
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) {
+    set.add(String(asNumber));
+  }
+  return Array.from(set);
+}
+
 function statusKey(value) {
   const s = String(value || "").trim().toLowerCase();
   if (s === "keldi") return "keldi";
@@ -125,6 +136,46 @@ async function sendKuratorDailyReport(bot, dateStr, records) {
   }
 }
 
+async function sendTaDailyStats(bot, dateStr, records) {
+  const tas = await User.find({
+    role: { $in: ["ta", "mentor_ta"] },
+    isActive: true,
+    telegramId: { $nin: [null, ""] }
+  })
+    .select("fullName telegramId role")
+    .lean();
+
+  if (!tas.length) return;
+
+  const markRecords = records.filter((row) => row.requestType === "mark");
+  const countByTeacherId = new Map();
+
+  for (const row of markRecords) {
+    const key = normalizeTelegramId(row.teacherId);
+    if (!key) continue;
+    countByTeacherId.set(key, (countByTeacherId.get(key) || 0) + 1);
+  }
+
+  for (const ta of tas) {
+    const comparableIds = toComparableTelegramIds(ta.telegramId);
+    let addedCount = 0;
+    for (const id of comparableIds) {
+      addedCount += countByTeacherId.get(id) || 0;
+    }
+
+    const text = [
+      `📊 <b>20:00 TA statistikasi (${dateStr})</b>`,
+      `Siz bugun <b>${addedCount}</b> ta o'quvchi qo'shdingiz.`
+    ].join("\n");
+
+    try {
+      await bot.telegram.sendMessage(ta.telegramId, text, { parse_mode: "HTML" });
+    } catch (error) {
+      console.error(`Failed to send TA daily stats to ${ta.fullName}:`, error.message);
+    }
+  }
+}
+
 async function sendDailyReport(bot) {
   if (isSendingReport) return;
   isSendingReport = true;
@@ -153,6 +204,7 @@ async function sendDailyReport(bot) {
 
     // Kurator uchun batafsil hisobot
     await sendKuratorDailyReport(bot, dateStr, records);
+    await sendTaDailyStats(bot, dateStr, records);
 
   } catch (error) {
     console.error("sendDailyReport error:", error);

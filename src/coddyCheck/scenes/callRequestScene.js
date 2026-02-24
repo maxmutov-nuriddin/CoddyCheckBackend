@@ -12,6 +12,7 @@ const { WizardScene } = Scenes;
 const CANCEL_BTN = "❌ Bekor qilish";
 const MANUAL_BTN = "✏️ O'zim kiritaman";
 const SKIP_COMMENT_BTN = "Bo'sh qoldirish";
+const FROZEN_STATUSES = ["frozen", "muzlatilgan", "qarzdor", "qaytadi"];
 
 const cancelKeyboard = Markup.keyboard([[CANCEL_BTN]]).resize();
 const optionalCommentKeyboard = Markup.keyboard([[SKIP_COMMENT_BTN], [CANCEL_BTN]]).resize();
@@ -172,7 +173,11 @@ const callRequestScene = new WizardScene(
 
     let students = [];
     try {
-      students = await Student.find({ groupId: group._id, isActive: true })
+      students = await Student.find({
+        groupId: group._id,
+        isActive: true,
+        frozenStatus: { $nin: FROZEN_STATUSES }
+      })
         .sort({ fullName: 1 })
         .lean();
     } catch {

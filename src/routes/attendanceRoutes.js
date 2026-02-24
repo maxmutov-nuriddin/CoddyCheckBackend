@@ -15,7 +15,9 @@ const {
   deleteActivity,
   updateActivity,
   createCalledStudent,
+  createStudentTalk,
   getCalledStudents,
+  getStudentTalks,
   deleteCalledStudent,
   updateCalledStudent
 } = require("../controllers/attendanceController");
@@ -44,6 +46,8 @@ router.delete("/activity/:id", deleteActivity);
 router.patch("/activity/:id", updateActivity);
 router.post("/called-students", createCalledStudent);
 router.get("/called-students", getCalledStudents);
+router.post("/student-talks", createStudentTalk);
+router.get("/student-talks", getStudentTalks);
 router.delete("/called-students/:id", deleteCalledStudent);
 router.patch("/called-students/:id", updateCalledStudent);
 

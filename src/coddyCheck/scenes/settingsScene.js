@@ -5,19 +5,34 @@ const { getWorkerMainKeyboard } = require("../keyboards");
 const teacherController = require("../controllers/teacherController");
 
 const { WizardScene } = Scenes;
+const MENU_MY_MARKS = "Mening yozuvlarim";
+const MENU_TA_STATS = "TA statistikasi";
+const MENU_DELETE_CALLS = "Chaqiruvni o'chirish";
+const MENU_CALL_HISTORY = "Chaqiruvlar tarixi";
+const MENU_BACK = "Orqaga";
+const LEGACY_DELETE_CALLS = "O'chirish";
+const LEGACY_CALL_HISTORY = "Tarix";
 
-// TA / mentor_ta: barcha opsiyalar
-const SETTINGS_KEYBOARD = Markup.keyboard([
-  ["Mening yozuvlarim", "TA statistikasi"],
-  ["O'chirish", "Tarix"],
-  ["Orqaga"]
+// Mentor+TA: barcha opsiyalar
+const MENTOR_TA_SETTINGS_KEYBOARD = Markup.keyboard([
+  [MENU_MY_MARKS, MENU_TA_STATS],
+  [MENU_DELETE_CALLS, MENU_CALL_HISTORY],
+  [MENU_BACK]
+]).resize();
+
+// TA: faqat TA bo'limlari
+const TA_SETTINGS_KEYBOARD = Markup.keyboard([
+  [MENU_MY_MARKS, MENU_TA_STATS],
+  [MENU_BACK]
 ]).resize();
 
 // Mentor: faqat chaqirish bo'limlari
 const MENTOR_SETTINGS_KEYBOARD = Markup.keyboard([
-  ["O'chirish", "Tarix"],
-  ["Orqaga"]
+  [MENU_DELETE_CALLS, MENU_CALL_HISTORY],
+  [MENU_BACK]
 ]).resize();
+
+const FALLBACK_SETTINGS_KEYBOARD = Markup.keyboard([[MENU_BACK]]).resize();
 
 function escapeHtml(value) {
   return String(value || "")
@@ -29,7 +44,22 @@ function escapeHtml(value) {
 }
 
 function getSettingsKeyboard(role) {
-  return role === "mentor" ? MENTOR_SETTINGS_KEYBOARD : SETTINGS_KEYBOARD;
+  if (role === "mentor_ta") return MENTOR_TA_SETTINGS_KEYBOARD;
+  if (role === "ta") return TA_SETTINGS_KEYBOARD;
+  if (role === "mentor") return MENTOR_SETTINGS_KEYBOARD;
+  return FALLBACK_SETTINGS_KEYBOARD;
+}
+
+function canUseMyMarks(role) {
+  return role === "ta" || role === "mentor_ta";
+}
+
+function canUseTaStats(role) {
+  return role === "ta" || role === "mentor_ta";
+}
+
+function canUseCallSections(role) {
+  return role === "mentor" || role === "mentor_ta";
 }
 
 async function showMyMarks(ctx) {
@@ -70,7 +100,7 @@ async function showTaStats(ctx) {
   ]);
 
   if (!stats.length) {
-    await ctx.reply("Hali statistika yo'q.", SETTINGS_KEYBOARD);
+    await ctx.reply("Hali statistika yo'q.", getSettingsKeyboard(String(ctx.state?.worker?.role || "").toLowerCase()));
     return;
   }
 
@@ -87,7 +117,10 @@ async function showTaStats(ctx) {
     lines.push(`${prefix} ${safeName} - <b>${s.count}</b> ta${marker}`);
   });
 
-  await ctx.reply(lines.join("\n"), { parse_mode: "HTML", reply_markup: SETTINGS_KEYBOARD.reply_markup });
+  await ctx.reply(lines.join("\n"), {
+    parse_mode: "HTML",
+    reply_markup: getSettingsKeyboard(String(ctx.state?.worker?.role || "").toLowerCase()).reply_markup
+  });
 }
 
 async function showDeleteSection(ctx) {
@@ -132,7 +165,7 @@ async function showTarix(ctx) {
   }).sort({ date: -1, createdAt: -1 }).lean();
 
   if (!records.length) {
-    await ctx.reply("Tarix bo'sh.");
+    await ctx.reply("Chaqiruvlar tarixi bo'sh.");
     return;
   }
 
@@ -149,7 +182,7 @@ async function showTarix(ctx) {
 
   const days = Object.keys(byDate).sort((a, b) => b.localeCompare(a)).slice(0, 14);
 
-  await ctx.reply(`📅 <b>Tarix — so'nggi ${days.length} kun:</b>`, { parse_mode: "HTML" });
+  await ctx.reply(`📅 <b>Chaqiruvlar tarixi — so'nggi ${days.length} kun:</b>`, { parse_mode: "HTML" });
 
   for (const day of days) {
     const dayRecords = byDate[day];
@@ -200,12 +233,16 @@ const settingsScene = new WizardScene(
     const text = ctx.message?.text;
     const role = String(ctx.state?.worker?.role || "").toLowerCase();
 
-    if (text === "Orqaga") {
+    if (text === MENU_BACK) {
       await ctx.reply("Asosiy menyu", Markup.keyboard(getWorkerMainKeyboard(role)).resize());
       return ctx.scene.leave();
     }
 
-    if (text === "Mening yozuvlarim") {
+    if (text === MENU_MY_MARKS) {
+      if (!canUseMyMarks(role)) {
+        await ctx.reply("Bu bo'lim sizning rolingiz uchun mavjud emas.", getSettingsKeyboard(role));
+        return;
+      }
       try {
         await showMyMarks(ctx);
       } catch (err) {
@@ -216,7 +253,11 @@ const settingsScene = new WizardScene(
       return ctx.scene.leave();
     }
 
-    if (text === "TA statistikasi") {
+    if (text === MENU_TA_STATS) {
+      if (!canUseTaStats(role)) {
+        await ctx.reply("Bu bo'lim sizning rolingiz uchun mavjud emas.", getSettingsKeyboard(role));
+        return;
+      }
       try {
         await showTaStats(ctx);
       } catch (err) {
@@ -226,22 +267,30 @@ const settingsScene = new WizardScene(
       return;
     }
 
-    if (text === "O'chirish") {
+    if (text === MENU_DELETE_CALLS || text === LEGACY_DELETE_CALLS) {
+      if (!canUseCallSections(role)) {
+        await ctx.reply("Bu bo'lim sizning rolingiz uchun mavjud emas.", getSettingsKeyboard(role));
+        return;
+      }
       try {
         await showDeleteSection(ctx);
       } catch (err) {
         console.error("showDeleteSection error:", err);
-        await ctx.reply("O'chirish bo'limida xatolik.", getSettingsKeyboard(role));
+        await ctx.reply("Chaqiruvni o'chirish bo'limida xatolik.", getSettingsKeyboard(role));
       }
       return;
     }
 
-    if (text === "Tarix") {
+    if (text === MENU_CALL_HISTORY || text === LEGACY_CALL_HISTORY) {
+      if (!canUseCallSections(role)) {
+        await ctx.reply("Bu bo'lim sizning rolingiz uchun mavjud emas.", getSettingsKeyboard(role));
+        return;
+      }
       try {
         await showTarix(ctx);
       } catch (err) {
         console.error("showTarix error:", err);
-        await ctx.reply("Tarixni olishda xatolik.", getSettingsKeyboard(role));
+        await ctx.reply("Chaqiruvlar tarixini olishda xatolik.", getSettingsKeyboard(role));
       }
       return;
     }

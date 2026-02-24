@@ -1,7 +1,6 @@
 ﻿const cron = require("node-cron");
 const Attendance = require("../models/Attendance");
 const User = require("../models/User");
-const TaNotificationTask = require("../models/TaNotificationTask");
 const CoddyAttendance = require("../coddyCheck/models/CoddyAttendance");
 const { sendTelegramMessage } = require("../services/telegramService");
 const { addDays, formatYMD, getDayBounds } = require("../utils/date");
@@ -311,55 +310,70 @@ async function sendReminderToTAs({ dateInput, hourTag, includeButtons }) {
   }
 }
 
-async function sendScheduledTaNotifications() {
+function formatTimeInAppTimezone(dateInput) {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: env.appTimezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(new Date(dateInput));
+}
+
+async function sendPendingRequestReminderToKurators() {
   if (isSunday()) return;
-  const today = new Date();
-  const { start, end } = getDayBounds(today);
+  const pendingRequests = await CoddyAttendance.find({
+    requestType: { $in: ["call_extra", "keep"] },
+    callConfirmed: false,
+    status: "Kutilmoqda"
+  })
+    .sort({ createdAt: 1 })
+    .lean();
 
-  const tasks = await TaNotificationTask.find({
-    status: "pending",
-    date: { $gte: start, $lte: end }
-  }).sort({ createdAt: 1 });
+  if (pendingRequests.length === 0) return;
 
-  if (tasks.length === 0) return;
-
-  // Load all active TAs once instead of once-per-task (eliminates N+1 query).
-  // In-memory direction filter is behaviourally identical to the DB $or clause:
-  //   { specialization: { $in: [direction, "both"] } } || { specialization: { $exists: false } }
-  const allTas = await User.find({
-    role: { $in: ["ta", "mentor_ta"] },
+  const kurators = await User.find({
+    role: "kurator",
     isActive: true,
-    telegramId: { $ne: null }
+    telegramId: { $nin: [null, ""] }
   }).lean();
 
-  for (const task of tasks) {
-    const tas = allTas.filter(
-      (ta) => !ta.specialization || ta.specialization === task.direction || ta.specialization === "both"
-    );
+  const recipientIds = new Set();
+  for (const kurator of kurators) {
+    const chatId = String(kurator.telegramId || "").trim();
+    if (chatId) recipientIds.add(chatId);
+  }
+  for (const adminId of env.coddyAdminIds || []) {
+    const chatId = String(adminId || "").trim();
+    if (chatId) recipientIds.add(chatId);
+  }
 
-    const lines = [
-      `<b>09:00 eslatma (${formatYMD(task.date)})</b>`,
-      `Yo'nalish: ${task.direction.toUpperCase()}`,
-      `O'quvchi: ${task.studentName}`,
-      task.time ? `Kelish vaqti: ${task.time}` : "",
-      task.comment ? `Izoh: ${task.comment}` : ""
-    ].filter(Boolean);
+  if (recipientIds.size === 0) return;
 
-    const text = lines.join("\n");
-    let sentCount = 0;
+  const previewRows = pendingRequests.slice(0, 30).map((row, idx) => {
+    const student = escapeHtml(row.studentName || "Noma'lum");
+    const group = escapeHtml(row.studentGroup || "-");
+    const requester = escapeHtml(row.teacherName || "Noma'lum");
+    const createdTime = escapeHtml(formatTimeInAppTimezone(row.createdAt));
+    return `${idx + 1}. ${student} (${group}) - ${requester} [${createdTime}]`;
+  });
 
-    for (const ta of tas) {
-      try {
-        await sendTelegramMessage({ telegramId: ta.telegramId, text });
-        sentCount += 1;
-      } catch (error) {
-        console.error(`Direction send failed for TA ${ta._id}: ${error.message}`);
-      }
+  const hiddenCount = Math.max(pendingRequests.length - previewRows.length, 0);
+  const text = [
+    "<b>09:00 eslatma</b>",
+    `So'rovda quyidagi o'quvchilar bor (${pendingRequests.length} ta):`,
+    "",
+    ...previewRows,
+    hiddenCount > 0 ? `... va yana ${hiddenCount} ta so'rov` : "",
+    "",
+    "Iltimos, so'rovlarni tekshirib tasdiqlang yoki rad eting."
+  ].filter(Boolean).join("\n");
+
+  for (const chatId of recipientIds) {
+    try {
+      await sendTelegramMessage({ telegramId: chatId, text });
+    } catch (error) {
+      console.error(`Failed to send 09:00 request reminder to kurator ${chatId}:`, error.message);
     }
-
-    task.status = sentCount > 0 ? "sent" : "failed";
-    task.sentAt = new Date();
-    await task.save();
   }
 }
 
@@ -506,7 +520,7 @@ function startAttendanceJobs() {
     "0 9 * * *",
     async () => {
       const today = new Date();
-      await sendScheduledTaNotifications();
+      await sendPendingRequestReminderToKurators();
       const digestResult = await sendMorningTodayExpectedDigest();
       console.log("09:00 expected today digest:", digestResult);
     },
@@ -526,4 +540,3 @@ function startAttendanceJobs() {
 }
 
 module.exports = startAttendanceJobs;
-

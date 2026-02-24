@@ -146,7 +146,11 @@ async function startCoddyCheckBot() {
 
   coddyBot.hears("📣 O'quvchi chaqirish", (ctx) => {
     if (!canUseCallRequest(ctx)) {
-      return ctx.reply("Bu tugma faqat Mentor va Mentor+TA uchun.");
+      return ctx.reply(
+        "Bu tugma faqat Mentor va Mentor+TA uchun.\n\n" +
+        "Quyidagi komandaga bosing:\n" +
+        "/start"
+      );
     }
     return ctx.scene.enter("coddy_call_request_wizard");
   });
@@ -161,13 +165,27 @@ async function startCoddyCheckBot() {
       text =
         "📣 O'quvchi chaqirish:\n" +
         "Darsga kelmagan o'quvchini chaqirish uchun '📣 O'quvchi chaqirish' tugmasini bosing va ko'rsatmalarga amal qiling.\n\n" +
+        "Har qanday vaziyat uchun: /start\n\n" +
         "Shikoyat va takliflar uchun: @mv_nuriddin";
-    } else {
+    } else if (role === "ta") {
+      text =
+        "➕ O'quvchi qo'shish:\n" +
+        "Kelgan o'quvchini davomatga qo'shish uchun '➕ O'quvchi qo'shish' tugmasini bosing.\n\n" +
+        "Har qanday vaziyat uchun: /start\n\n" +
+        "Shikoyat va takliflar uchun: @mv_nuriddin";
+    } else if (role === "mentor_ta") {
       text =
         "📣 O'quvchi chaqirish:\n" +
         "Darsga kelmagan o'quvchini chaqirish uchun '📣 O'quvchi chaqirish' tugmasini bosing va ko'rsatmalarga amal qiling.\n\n" +
         "➕ O'quvchi qo'shish:\n" +
         "Kelgan o'quvchini davomatga qo'shish uchun '➕ O'quvchi qo'shish' tugmasini bosing.\n\n" +
+        "Har qanday vaziyat uchun: /start\n\n" +
+        "Shikoyat va takliflar uchun: @mv_nuriddin";
+    } else {
+      text =
+        "ℹ️ Yordam:\n" +
+        "Menyudagi tugmalar orqali ishlang.\n\n" +
+        "Har qanday vaziyat uchun: /start\n\n" +
         "Shikoyat va takliflar uchun: @mv_nuriddin";
     }
 

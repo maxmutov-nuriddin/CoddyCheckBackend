@@ -16,6 +16,7 @@ const CANCEL_BTN = "❌ Bekor qilish";
 const MANUAL_BTN = "✏️ O'zim yozaman";
 const RETRY_BTN = "🔁 Qayta yozaman";
 const cancelKeyboard = Markup.keyboard([[CANCEL_BTN]]).resize();
+const FROZEN_STATUSES = ["frozen", "muzlatilgan", "qarzdor", "qaytadi"];
 
 function mainKeyboard(ctx) {
   return Markup.keyboard(getWorkerMainKeyboard(ctx.state?.worker?.role)).resize();
@@ -44,7 +45,11 @@ async function selectGroupAndAskStudent(ctx, group) {
 
   let students = [];
   try {
-    students = await Student.find({ groupId: group._id, isActive: true }).sort({ fullName: 1 }).lean();
+    students = await Student.find({
+      groupId: group._id,
+      isActive: true,
+      frozenStatus: { $nin: FROZEN_STATUSES }
+    }).sort({ fullName: 1 }).lean();
   } catch {
     // ignore
   }

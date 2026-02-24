@@ -1,6 +1,7 @@
 ﻿const Attendance = require("../models/Attendance");
 const Student = require("../models/Student");
 const CalledStudent = require("../models/CalledStudent");
+const StudentTalk = require("../models/StudentTalk");
 const TaNotificationTask = require("../models/TaNotificationTask");
 const User = require("../models/User");
 const CoddyAttendance = require("../coddyCheck/models/CoddyAttendance");
@@ -1094,6 +1095,69 @@ const createCalledStudent = asyncHandler(async (req, res) => {
   return ok(res, record, "Call record saved");
 });
 
+const createStudentTalk = asyncHandler(async (req, res) => {
+  const { studentId, date, comment = "" } = req.body;
+
+  if (!studentId) throw new ApiError(400, "studentId is required");
+
+  const student = await Student.findById(studentId).lean();
+  if (!student) throw new ApiError(404, "Student not found");
+
+  const normalizedDate = date ? normalizeDateOnly(date) : normalizeDateOnly(new Date());
+  const talkEntry = {
+    date: normalizedDate,
+    comment: String(comment || "").trim(),
+    createdAt: new Date()
+  };
+
+  const record = await StudentTalk.findOneAndUpdate(
+    { studentId },
+    {
+      $inc: { talkCount: 1 },
+      $push: { talks: talkEntry },
+      $setOnInsert: { groupId: student.groupId || undefined }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+
+  return ok(res, record, "Student talk saved");
+});
+
+const getStudentTalks = asyncHandler(async (req, res) => {
+  const { studentId } = req.query;
+  const filter = {};
+
+  if (studentId) {
+    filter.studentId = studentId;
+  }
+
+  const rows = await StudentTalk.find(filter)
+    .populate("studentId", "fullName")
+    .populate("groupId", "name mentor")
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .lean();
+
+  const normalizedRows = rows.map((row) => {
+    const talks = Array.isArray(row.talks) ? row.talks.slice() : [];
+    talks.sort((a, b) => {
+      const aDate = new Date(a?.date || a?.createdAt || 0).getTime();
+      const bDate = new Date(b?.date || b?.createdAt || 0).getTime();
+      if (bDate !== aDate) return bDate - aDate;
+      const aCreated = new Date(a?.createdAt || 0).getTime();
+      const bCreated = new Date(b?.createdAt || 0).getTime();
+      return bCreated - aCreated;
+    });
+
+    return {
+      ...row,
+      talks,
+      talkCount: Number(row?.talkCount || talks.length || 0)
+    };
+  });
+
+  return ok(res, normalizedRows, "Student talks list");
+});
+
 const getCalledStudents = asyncHandler(async (req, res) => {
   const date = req.query.date;
   let filter = {};
@@ -1260,7 +1324,9 @@ module.exports = {
   getAllActivity,
   getBotCalls,
   createCalledStudent,
+  createStudentTalk,
   getCalledStudents,
+  getStudentTalks,
   deleteCalledStudent,
   updateActivity,
   updateCalledStudent
