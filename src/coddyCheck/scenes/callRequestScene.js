@@ -1,4 +1,4 @@
-const { Scenes, Markup } = require("telegraf");
+﻿const { Scenes, Markup } = require("telegraf");
 const { DateTime } = require("luxon");
 const env = require("../../config/env");
 const CoddyAttendance = require("../models/CoddyAttendance");
@@ -9,8 +9,12 @@ const { normalizeGroupName } = require("../utils/normalizeGroupName");
 
 const { WizardScene } = Scenes;
 
-const cancelKeyboard = Markup.keyboard([["❌ Bekor qilish"]]).resize();
+const CANCEL_BTN = "❌ Bekor qilish";
 const MANUAL_BTN = "✏️ O'zim kiritaman";
+const SKIP_COMMENT_BTN = "Bo'sh qoldirish";
+
+const cancelKeyboard = Markup.keyboard([[CANCEL_BTN]]).resize();
+const optionalCommentKeyboard = Markup.keyboard([[SKIP_COMMENT_BTN], [CANCEL_BTN]]).resize();
 
 function requestTypeLabel(type) {
   if (type === "call_extra") return "Qo'shimchaga chaqirish";
@@ -33,8 +37,11 @@ function cancelAndExit(ctx) {
   return ctx.scene.leave();
 }
 
-// Unchanged save/notify logic — extracted to avoid duplication
-async function saveAndNotify(ctx, studentName, rawGroupName) {
+async function askOptionalComment(ctx) {
+  await ctx.reply("Izoh kiriting (ixtiyoriy):", optionalCommentKeyboard);
+}
+
+async function saveAndNotify(ctx, studentName, rawGroupName, comment = "") {
   const normalizedGroup = normalizeGroupName(rawGroupName);
   const requestType = ctx.wizard.state.requestType || "call_extra";
   const workerName =
@@ -45,6 +52,8 @@ async function saveAndNotify(ctx, studentName, rawGroupName) {
   const date = now.toFormat("yyyy-MM-dd");
   const time = now.toFormat("HH:mm");
   const requestLabel = requestTypeLabel(requestType);
+  const normalizedComment = String(comment || "").trim().replace(/\s+/g, " ");
+  const topic = normalizedComment || `So'rov: ${requestLabel}`;
 
   try {
     await CoddyAttendance.create({
@@ -53,7 +62,7 @@ async function saveAndNotify(ctx, studentName, rawGroupName) {
       studentName,
       studentGroup: normalizedGroup,
       mainTeacher: workerName,
-      topic: `So'rov: ${requestLabel}`,
+      topic,
       status: "Kutilmoqda",
       requesterRole: workerRoleRaw,
       callConfirmed: false,
@@ -68,6 +77,7 @@ async function saveAndNotify(ctx, studentName, rawGroupName) {
         `Turi: ${requestLabel}`,
         `O'quvchi: ${studentName}`,
         `Guruh: ${rawGroupName}`,
+        ...(normalizedComment ? [`Izoh: ${normalizedComment}`] : []),
         `Vaqt: ${date} ${time}`
       ].join("\n"),
       mainKeyboard(ctx)
@@ -79,6 +89,7 @@ async function saveAndNotify(ctx, studentName, rawGroupName) {
       `Turi: ${requestLabel}`,
       `O'quvchi: ${studentName}`,
       `Guruh: ${rawGroupName}`,
+      ...(normalizedComment ? [`Izoh: ${normalizedComment}`] : []),
       `Sana: ${date} ${time}`
     ].join("\n");
 
@@ -100,7 +111,7 @@ async function saveAndNotify(ctx, studentName, rawGroupName) {
 const callRequestScene = new WizardScene(
   "coddy_call_request_wizard",
 
-  // Step 0 — Entry: show mentor's groups or go straight to manual
+  // Step 0 - Entry: show mentor's groups or go straight to manual
   async (ctx) => {
     ctx.wizard.state.requestType = "call_extra";
 
@@ -111,15 +122,16 @@ const callRequestScene = new WizardScene(
     if (workerName) {
       try {
         groups = await Group.find({ mentor: workerName }).lean();
-      } catch { /* silent */ }
+      } catch {
+        // silent
+      }
     }
 
     if (!groups.length) {
-      // No groups in DB — skip step 1, go directly to step 2 (manual)
       ctx.wizard.state.flow = "manual";
       await ctx.reply("O'quvchi ism familiyasini kiriting:", cancelKeyboard);
-      ctx.wizard.next(); // 0→1
-      ctx.wizard.next(); // 1→2
+      ctx.wizard.next(); // 0->1
+      ctx.wizard.next(); // 1->2
       return;
     }
 
@@ -127,20 +139,20 @@ const callRequestScene = new WizardScene(
 
     const groupButtons = [[MANUAL_BTN]];
     groups.forEach((g) => groupButtons.push([g.name + (g.days ? ` (${g.days})` : "")]));
-    groupButtons.push(["❌ Bekor qilish"]);
+    groupButtons.push([CANCEL_BTN]);
 
     await ctx.reply("Guruhni tanlang:", Markup.keyboard(groupButtons).resize());
-    return ctx.wizard.next(); // 0→1
+    return ctx.wizard.next(); // 0->1
   },
 
-  // Step 1 — Group selection
+  // Step 1 - Group selection
   async (ctx) => {
-    if (ctx.message?.text === "❌ Bekor qilish") return cancelAndExit(ctx);
+    if (ctx.message?.text === CANCEL_BTN) return cancelAndExit(ctx);
 
     if (ctx.message?.text === MANUAL_BTN) {
       ctx.wizard.state.flow = "manual";
       await ctx.reply("O'quvchi ism familiyasini kiriting:", cancelKeyboard);
-      return ctx.wizard.next(); // 1→2
+      return ctx.wizard.next(); // 1->2
     }
 
     const selectedText = String(ctx.message?.text || "").trim();
@@ -163,7 +175,9 @@ const callRequestScene = new WizardScene(
       students = await Student.find({ groupId: group._id, isActive: true })
         .sort({ fullName: 1 })
         .lean();
-    } catch { /* silent */ }
+    } catch {
+      // silent
+    }
 
     ctx.wizard.state.students = students;
 
@@ -173,65 +187,92 @@ const callRequestScene = new WizardScene(
         `${group.name} guruhida faol o'quvchi topilmadi.\nO'quvchi ismini kiriting:`,
         cancelKeyboard
       );
-      return ctx.wizard.next(); // 1→2
+      return ctx.wizard.next(); // 1->2
     }
 
     const studentButtons = [[MANUAL_BTN]];
     students.forEach((s) => studentButtons.push([s.fullName]));
-    studentButtons.push(["❌ Bekor qilish"]);
+    studentButtons.push([CANCEL_BTN]);
 
     await ctx.reply(
       `${group.name} guruhidagi o'quvchilar:`,
       Markup.keyboard(studentButtons).resize()
     );
-    return ctx.wizard.next(); // 1→2
+    return ctx.wizard.next(); // 1->2
   },
 
-  // Step 2 — Student selection or manual student name
+  // Step 2 - Student selection or manual student name
   async (ctx) => {
-    if (ctx.message?.text === "❌ Bekor qilish") return cancelAndExit(ctx);
+    if (ctx.message?.text === CANCEL_BTN) return cancelAndExit(ctx);
 
     const text = String(ctx.message?.text || "").trim();
     const flow = ctx.wizard.state.flow;
 
-    // Full manual mode: this message is the student name
     if (flow === "manual") {
       if (!text) return ctx.reply("Ism familiyani kiriting.");
       ctx.wizard.state.studentName = text;
       await ctx.reply("Guruhini kiriting:", cancelKeyboard);
-      return ctx.wizard.next(); // 2→3
+      return ctx.wizard.next(); // 2->3
     }
 
-    // Group selected but no students found — waiting for manually typed student name
     if (flow === "group_manual") {
       if (!text) return ctx.reply("O'quvchi ismini kiriting.");
-      return saveAndNotify(ctx, text, ctx.wizard.state.groupName);
+      ctx.wizard.state.studentName = text;
+      ctx.wizard.state.finalGroupName = ctx.wizard.state.groupName;
+      await askOptionalComment(ctx);
+      ctx.wizard.next(); // 2->3
+      return ctx.wizard.next(); // 3->4
     }
 
-    // Group mode: student list was shown
     if (flow === "group") {
       if (text === MANUAL_BTN) {
-        // Switch to manual student entry, stay in step 2
         ctx.wizard.state.flow = "group_manual";
         await ctx.reply("O'quvchi ism familiyasini kiriting:", cancelKeyboard);
-        return; // no next() — step 2 handles the next message
+        return;
       }
+
       if (!text) return ctx.reply("O'quvchini tanlang yoki ismini kiriting.");
-      return saveAndNotify(ctx, text, ctx.wizard.state.groupName);
+      ctx.wizard.state.studentName = text;
+      ctx.wizard.state.finalGroupName = ctx.wizard.state.groupName;
+      await askOptionalComment(ctx);
+      ctx.wizard.next(); // 2->3
+      return ctx.wizard.next(); // 3->4
     }
   },
 
-  // Step 3 — Manual group name (only reached from full manual flow)
+  // Step 3 - Manual group name (only for full manual flow)
   async (ctx) => {
-    if (ctx.message?.text === "❌ Bekor qilish") return cancelAndExit(ctx);
+    if (ctx.message?.text === CANCEL_BTN) return cancelAndExit(ctx);
+
+    const flow = ctx.wizard.state.flow;
+    if (flow !== "manual") {
+      return; // skipped via double-next for non-manual flows
+    }
 
     const studentGroup = String(ctx.message?.text || "").trim();
     if (!studentGroup) return ctx.reply("Guruhini kiriting.");
 
-    return saveAndNotify(ctx, ctx.wizard.state.studentName, studentGroup);
+    ctx.wizard.state.finalGroupName = studentGroup;
+    await askOptionalComment(ctx);
+    return ctx.wizard.next(); // 3->4
+  },
+
+  // Step 4 - Optional comment and save
+  async (ctx) => {
+    if (ctx.message?.text === CANCEL_BTN) return cancelAndExit(ctx);
+
+    const text = String(ctx.message?.text || "").trim();
+    const comment = text === SKIP_COMMENT_BTN ? "" : text;
+
+    return saveAndNotify(
+      ctx,
+      ctx.wizard.state.studentName,
+      ctx.wizard.state.finalGroupName,
+      comment
+    );
   }
 );
 
-callRequestScene.hears("❌ Bekor qilish", (ctx) => cancelAndExit(ctx));
+callRequestScene.hears(CANCEL_BTN, (ctx) => cancelAndExit(ctx));
 
 module.exports = callRequestScene;
