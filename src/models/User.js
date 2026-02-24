@@ -29,6 +29,13 @@ const userSchema = new mongoose.Schema(
       trim: true,
       default: null
     },
+    color: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "#3B82F6",
+      match: /^#[0-9A-F]{6}$/
+    },
     password: {
       type: String,
       required: true,
