@@ -11,6 +11,86 @@ const STAFF_ROLES = ["mentor", "ta", "mentor_ta"];
 const FREEZE_STATUSES = ["frozen", "muzlatilgan", "qarzdor", "qaytadi"];
 const MONTH_UZ = ["Yan", "Fev", "Mar", "Apr", "May", "Iyn", "Iyl", "Avg", "Sen", "Okt", "Noy", "Dek"];
 
+function startOfDay(input) {
+  const d = new Date(input);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function endOfDay(input) {
+  const d = new Date(input);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+
+function startOfWeekMonday(input) {
+  const d = startOfDay(input);
+  const day = d.getDay(); // 0..6 (Sun..Sat)
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+
+function startOfMonth(input) {
+  const d = startOfDay(input);
+  d.setDate(1);
+  return d;
+}
+
+function addDays(input, n) {
+  const d = new Date(input);
+  d.setDate(d.getDate() + n);
+  return d;
+}
+
+function addMonths(input, n) {
+  const d = new Date(input);
+  d.setMonth(d.getMonth() + n);
+  return d;
+}
+
+function getIsoWeekInfo(input) {
+  const d = startOfDay(input);
+  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
+  const weekYear = d.getFullYear();
+  const firstThursday = new Date(weekYear, 0, 4);
+  firstThursday.setDate(firstThursday.getDate() + 3 - ((firstThursday.getDay() + 6) % 7));
+  const weekNo = 1 + Math.round((d - firstThursday) / (7 * 24 * 60 * 60 * 1000));
+  return { year: weekYear, week: weekNo };
+}
+
+function buildTrendGroupId(group, dateExpr) {
+  if (group === "day") {
+    return {
+      year: { $year: dateExpr },
+      month: { $month: dateExpr },
+      day: { $dayOfMonth: dateExpr }
+    };
+  }
+  if (group === "week") {
+    return {
+      year: { $isoWeekYear: dateExpr },
+      week: { $isoWeek: dateExpr }
+    };
+  }
+  return {
+    year: { $year: dateExpr },
+    month: { $month: dateExpr }
+  };
+}
+
+function buildTrendSort(group) {
+  if (group === "day") return { "_id.year": 1, "_id.month": 1, "_id.day": 1 };
+  if (group === "week") return { "_id.year": 1, "_id.week": 1 };
+  return { "_id.year": 1, "_id.month": 1 };
+}
+
+function trendKeyFromAgg(group, bucket) {
+  if (group === "day") return `${bucket.year}-${bucket.month}-${bucket.day}`;
+  if (group === "week") return `${bucket.year}-W${bucket.week}`;
+  return `${bucket.year}-${bucket.month}`;
+}
+
 async function buildKuratorExclusion() {
   const kurators = await User.find({ role: "kurator", isActive: true })
     .select("_id telegramId")
@@ -94,9 +174,13 @@ function findBestUnusedKey(workerName, keys, usedKeys) {
 const getAnalytics = asyncHandler(async (req, res) => {
   try {
     const { dateFrom, dateTo } = req.query;
+    const rawTrendGroup = String(req.query.trendGroup || "month").toLowerCase();
+    const trendGroup = ["day", "week", "month"].includes(rawTrendGroup) ? rawTrendGroup : "month";
 
     const attMatch = {};
     const botMatch = {};
+    let parsedStart = null;
+    let parsedEnd = null;
 
     if (dateFrom || dateTo) {
       const start = dateFrom ? new Date(dateFrom) : null;
@@ -109,14 +193,42 @@ const getAnalytics = asyncHandler(async (req, res) => {
 
         if (start) botMatch.date = { ...botMatch.date, $gte: formatYMD(start) };
         if (end) botMatch.date = { ...botMatch.date, $lte: formatYMD(end) };
+
+        parsedStart = start;
+        parsedEnd = end;
       }
     }
 
-    const sixMonthsAgo = new Date();
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
-    sixMonthsAgo.setDate(1);
-    sixMonthsAgo.setHours(0, 0, 0, 0);
+    const now = new Date();
+    let trendStart;
+    let trendEnd;
+
+    if (parsedStart || parsedEnd) {
+      trendStart = parsedStart ? startOfDay(parsedStart) : startOfDay(parsedEnd || now);
+      trendEnd = parsedEnd ? endOfDay(parsedEnd) : endOfDay(parsedStart || now);
+    } else if (trendGroup === "day") {
+      trendStart = startOfDay(addDays(now, -6));
+      trendEnd = endOfDay(now);
+    } else if (trendGroup === "week") {
+      trendStart = startOfWeekMonday(addDays(now, -49)); // 8 weeks
+      trendEnd = endOfDay(now);
+    } else {
+      trendStart = startOfMonth(addMonths(now, -5)); // 6 months
+      trendEnd = endOfDay(now);
+    }
+
     const { attNonKuratorMatch, botNonKuratorMatch } = await buildKuratorExclusion();
+    const trendBotMatch = {
+      ...botNonKuratorMatch,
+      date: { $gte: formatYMD(trendStart), $lte: formatYMD(trendEnd) }
+    };
+    const trendAttMatch = {
+      ...attNonKuratorMatch,
+      date: { $gte: trendStart, $lte: trendEnd }
+    };
+    const trendPlatformMatch = { date: { $gte: trendStart, $lte: trendEnd } };
+    const trendGroupId = buildTrendGroupId(trendGroup, "$date");
+    const trendSort = buildTrendSort(trendGroup);
 
     const [
       workers,
@@ -260,52 +372,52 @@ const getAnalytics = asyncHandler(async (req, res) => {
       ]),
 
       Attendance.aggregate([
-        { $match: { date: { $gte: sixMonthsAgo }, ...attNonKuratorMatch } },
+        { $match: trendAttMatch },
         {
           $group: {
-            _id: { month: { $month: "$date" }, year: { $year: "$date" } },
+            _id: trendGroupId,
             invited: { $sum: { $cond: [{ $eq: ["$callStatus", "chaqirilgan"] }, 1, 0] } },
             invitedAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$callStatus", "chaqirilgan"] }, { $eq: ["$attendanceStatus", "keldi"] }] }, 1, 0] } },
             totalAttended: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } },
             missed: { $sum: { $cond: [{ $and: [{ $eq: ["$callStatus", "chaqirilgan"] }, { $eq: ["$attendanceStatus", "kelmadi"] }] }, 1, 0] } }
           }
         },
-        { $sort: { "_id.year": 1, "_id.month": 1 } }
+        { $sort: trendSort }
       ]).catch((err) => {
         console.error("trendAgg error:", err);
         return [];
       }),
 
       CoddyAttendance.aggregate([
-        { $match: { date: { $gte: formatYMD(sixMonthsAgo) }, ...botNonKuratorMatch } },
+        { $match: trendBotMatch },
         { $addFields: { dateObj: { $dateFromString: { dateString: "$date", onError: new Date(0) } } } },
         {
           $group: {
-            _id: { month: { $month: "$dateObj" }, year: { $year: "$dateObj" } },
+            _id: buildTrendGroupId(trendGroup, "$dateObj"),
             invited: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }] }, 1, 0] } },
             invitedAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Keldi"] }] }, 1, 0] } },
             totalAttended: { $sum: { $cond: [{ $and: [{ $eq: ["$requestType", "mark"] }, { $eq: ["$status", "Keldi"] }, { $ne: ["$webSync", true] }] }, 1, 0] } },
             missed: { $sum: { $cond: [{ $and: [{ $eq: ["$callConfirmed", true] }, { $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Kelmadi"] }] }, 1, 0] } }
           }
         },
-        { $sort: { "_id.year": 1, "_id.month": 1 } }
+        { $sort: trendSort }
       ]).catch((err) => {
         console.error("trendBotAgg error:", err);
         return [];
       }),
 
       CalledStudent.aggregate([
-        { $match: { date: { $gte: sixMonthsAgo } } },
+        { $match: trendPlatformMatch },
         {
           $group: {
-            _id: { month: { $month: "$date" }, year: { $year: "$date" } },
+            _id: trendGroupId,
             invited: { $sum: "$callCount" },
             invitedAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } },
             totalAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } },
             missed: { $sum: { $cond: [{ $eq: ["$lastStatus", "kelmadi"] }, 1, 0] } }
           }
         },
-        { $sort: { "_id.year": 1, "_id.month": 1 } }
+        { $sort: trendSort }
       ]).catch((err) => {
         console.error("trendPlatformCallAgg error:", err);
         return [];
@@ -416,18 +528,39 @@ const getAnalytics = asyncHandler(async (req, res) => {
       })
       .sort((a, b) => b.entryCount - a.entryCount);
 
-    const trendMap = new Map();
-    for (let i = 0; i < 6; i++) {
-      const d = new Date();
-      d.setMonth(d.getMonth() - (5 - i));
-      const m = d.getMonth() + 1;
-      const y = d.getFullYear();
-      const key = `${y}-${m}`;
-      trendMap.set(key, { name: MONTH_UZ[m - 1], invited: 0, invitedAttended: 0, totalAttended: 0, missed: 0 });
+    const trendBuckets = [];
+    if (trendGroup === "day") {
+      for (let d = startOfDay(trendStart); d <= trendEnd; d = addDays(d, 1)) {
+        const key = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+        const label = `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+        trendBuckets.push({ key, label });
+      }
+    } else if (trendGroup === "week") {
+      for (let d = startOfWeekMonday(trendStart); d <= trendEnd; d = addDays(d, 7)) {
+        const iso = getIsoWeekInfo(d);
+        const weekStart = startOfDay(d);
+        const weekEndRaw = addDays(weekStart, 6);
+        const weekEnd = weekEndRaw > trendEnd ? trendEnd : weekEndRaw;
+        const fromLabel = `${String(weekStart.getDate()).padStart(2, "0")}.${String(weekStart.getMonth() + 1).padStart(2, "0")}`;
+        const toLabel = `${String(weekEnd.getDate()).padStart(2, "0")}.${String(weekEnd.getMonth() + 1).padStart(2, "0")}`;
+        trendBuckets.push({ key: `${iso.year}-W${iso.week}`, label: `${fromLabel} - ${toLabel}` });
+      }
+    } else {
+      for (let d = startOfMonth(trendStart); d <= trendEnd; d = startOfMonth(addMonths(d, 1))) {
+        const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+        trendBuckets.push({ key, label: MONTH_UZ[d.getMonth()] });
+      }
     }
 
+    const trendMap = new Map(
+      trendBuckets.map((bucket) => [
+        bucket.key,
+        { name: bucket.label, invited: 0, invitedAttended: 0, totalAttended: 0, missed: 0 }
+      ])
+    );
+
     trendAgg.forEach((r) => {
-      const key = `${r._id.year}-${r._id.month}`;
+      const key = trendKeyFromAgg(trendGroup, r._id || {});
       if (trendMap.has(key)) {
         const existing = trendMap.get(key);
         existing.invited += (r.invited || 0);
@@ -438,7 +571,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
     });
 
     trendBotAgg.forEach((r) => {
-      const key = `${r._id.year}-${r._id.month}`;
+      const key = trendKeyFromAgg(trendGroup, r._id || {});
       if (trendMap.has(key)) {
         const existing = trendMap.get(key);
         existing.invited += (r.invited || 0);
@@ -449,7 +582,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
     });
 
     trendPlatformCallAgg.forEach((r) => {
-      const key = `${r._id.year}-${r._id.month}`;
+      const key = trendKeyFromAgg(trendGroup, r._id || {});
       if (trendMap.has(key)) {
         const existing = trendMap.get(key);
         existing.invited += (r.invited || 0);
@@ -459,7 +592,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
       }
     });
 
-    const trend = Array.from(trendMap.values()).map((t) => ({
+    const trend = trendBuckets.map((bucket) => trendMap.get(bucket.key)).map((t) => ({
       month: t.name,
       attended: t.totalAttended,
       missed: t.missed,

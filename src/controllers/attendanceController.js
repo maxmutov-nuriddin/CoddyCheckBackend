@@ -1118,13 +1118,19 @@ const deleteCalledStudent = asyncHandler(async (req, res) => {
 
 const updateActivity = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { comment, status } = req.body;
+  const { comment, status, date, time } = req.body;
 
   if (id.startsWith("bot-")) {
     const botId = id.slice(4);
     const updateData = {};
     if (typeof comment !== "undefined") updateData.topic = comment;
     if (typeof status !== "undefined") updateData.status = status;
+    if (typeof date !== "undefined" && date) {
+      updateData.date = formatYMD(getDayBounds(date).start);
+    }
+    if (typeof time !== "undefined") {
+      updateData.time = time;
+    }
 
     const updated = await CoddyAttendance.findByIdAndUpdate(botId, updateData, { new: true });
     if (!updated) throw new ApiError(404, "Bot activity not found");
@@ -1135,6 +1141,18 @@ const updateActivity = asyncHandler(async (req, res) => {
     if (typeof comment !== "undefined") updateData.comment = comment;
     if (typeof status !== "undefined") {
       updateData.attendanceStatus = status === "Kutilmoqda" ? null : status === "Keldi" ? "keldi" : "kelmadi";
+    }
+    if (typeof date !== "undefined" && date) {
+      updateData.date = getDayBounds(date).start;
+    }
+    if (typeof time !== "undefined") {
+      const normalizedDate = typeof date !== "undefined" && date ? getDayBounds(date).start : null;
+      const ymd = formatYMD(normalizedDate || new Date());
+      if (time === "Kun davomida") {
+        updateData.time = null;
+      } else if (/^([01]\d|2[0-3]):([0-5]\d)$/.test(String(time))) {
+        updateData.time = new Date(`${ymd}T${time}:00`);
+      }
     }
 
     const updated = await Attendance.findByIdAndUpdate(webId, updateData, { new: true });
@@ -1147,10 +1165,16 @@ const updateActivity = asyncHandler(async (req, res) => {
 
 const updateCalledStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { comment, status } = req.body;
+  const { comment, status, date, time } = req.body;
 
   const record = await CalledStudent.findById(id);
   if (!record) throw new ApiError(404, "Called student record not found");
+
+  const oldDate = record.date ? new Date(record.date) : null;
+
+  if (typeof date !== "undefined" && date) {
+    record.date = getDayBounds(date).start;
+  }
 
   if (typeof status !== "undefined") {
     record.lastStatus = status === "Kutilmoqda" ? "pending" : status.toLowerCase();
@@ -1164,18 +1188,51 @@ const updateCalledStudent = asyncHandler(async (req, res) => {
     }
   }
 
+  if (typeof time !== "undefined" && record.calls.length > 0) {
+    record.calls[record.calls.length - 1].time = time;
+  }
+
   await record.save();
 
   // Sync with Attendance model for consistency (AttendancePage / Guruhlar)
   try {
-    const matchingAttendance = await Attendance.findOne({
-      studentId: record.studentId,
-      date: record.date
-    });
+    let matchingAttendance = null;
+    const targetDate = record.date ? new Date(record.date) : null;
+
+    if (oldDate) {
+      const oldBounds = getDayBounds(oldDate);
+      matchingAttendance = await Attendance.findOne({
+        studentId: record.studentId,
+        date: { $gte: oldBounds.start, $lte: oldBounds.end }
+      });
+    }
+
+    if (!matchingAttendance && targetDate) {
+      const newBounds = getDayBounds(targetDate);
+      matchingAttendance = await Attendance.findOne({
+        studentId: record.studentId,
+        date: { $gte: newBounds.start, $lte: newBounds.end }
+      });
+    }
+
     if (matchingAttendance) {
       if (typeof comment !== "undefined") matchingAttendance.comment = comment;
       if (typeof status !== "undefined") {
         matchingAttendance.attendanceStatus = (status === "Kutilmoqda" || status === "pending") ? null : status.toLowerCase();
+      }
+      if (typeof date !== "undefined" && date) {
+        matchingAttendance.date = getDayBounds(date).start;
+      }
+      if (typeof time !== "undefined") {
+        const effectiveDate = typeof date !== "undefined" && date
+          ? getDayBounds(date).start
+          : (matchingAttendance.date || targetDate || new Date());
+        const ymd = formatYMD(effectiveDate);
+        if (time === "Kun davomida") {
+          matchingAttendance.time = null;
+        } else if (/^([01]\d|2[0-3]):([0-5]\d)$/.test(String(time))) {
+          matchingAttendance.time = new Date(`${ymd}T${time}:00`);
+        }
       }
       await matchingAttendance.save();
     }
