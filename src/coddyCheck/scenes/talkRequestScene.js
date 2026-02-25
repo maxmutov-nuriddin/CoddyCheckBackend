@@ -1,4 +1,4 @@
-﻿const { Scenes, Markup } = require("telegraf");
+const { Scenes, Markup } = require("telegraf");
 const { DateTime } = require("luxon");
 const env = require("../../config/env");
 const CoddyAttendance = require("../models/CoddyAttendance");
@@ -11,16 +11,9 @@ const { WizardScene } = Scenes;
 
 const CANCEL_BTN = "❌ Bekor qilish";
 const MANUAL_BTN = "✏️ O'zim kiritaman";
-const SKIP_COMMENT_BTN = "Bo'sh qoldirish";
 const FROZEN_STATUSES = ["frozen", "muzlatilgan", "qarzdor", "qaytadi"];
 
 const cancelKeyboard = Markup.keyboard([[CANCEL_BTN]]).resize();
-const optionalCommentKeyboard = Markup.keyboard([[SKIP_COMMENT_BTN], [CANCEL_BTN]]).resize();
-
-function requestTypeLabel(type) {
-  if (type === "call_extra") return "Qo'shimchaga chaqirish";
-  return "So'rov";
-}
 
 function roleLabel(role) {
   if (role === "mentor_ta") return "Mentor + TA";
@@ -37,18 +30,21 @@ function escapeRegExp(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function normalizeCompactText(value) {
+  return String(value || "").trim().replace(/\s+/g, " ");
+}
+
 function cancelAndExit(ctx) {
   ctx.reply("Bekor qilindi", mainKeyboard(ctx));
   return ctx.scene.leave();
 }
 
-async function askOptionalComment(ctx) {
-  await ctx.reply("Izoh kiriting (ixtiyoriy):", optionalCommentKeyboard);
+async function askMandatoryComment(ctx) {
+  await ctx.reply("Murojatingizni yozing:", cancelKeyboard);
 }
 
-async function saveAndNotify(ctx, studentName, rawGroupName, comment = "") {
+async function saveAndNotify(ctx, studentName, rawGroupName, comment) {
   const normalizedGroup = normalizeGroupName(rawGroupName);
-  const requestType = ctx.wizard.state.requestType || "call_extra";
   const workerName =
     ctx.state?.worker?.fullName || ctx.from.first_name || ctx.from.username || "Unknown";
   const workerRoleRaw = String(ctx.state?.worker?.role || "unknown").toLowerCase();
@@ -56,9 +52,13 @@ async function saveAndNotify(ctx, studentName, rawGroupName, comment = "") {
   const now = DateTime.now().setZone(env.appTimezone || "Asia/Tashkent");
   const date = now.toFormat("yyyy-MM-dd");
   const time = now.toFormat("HH:mm");
-  const requestLabel = requestTypeLabel(requestType);
-  const normalizedComment = String(comment || "").trim().replace(/\s+/g, " ");
-  const topic = normalizedComment || `So'rov: ${requestLabel}`;
+  const normalizedComment = normalizeCompactText(comment);
+
+  if (!normalizedComment) {
+    await ctx.reply("Murojat matni bo'sh bo'lmasligi kerak.");
+    return;
+  }
+
   const studentNameRegex = new RegExp(`^${escapeRegExp(studentName)}$`, "i");
   const groupNameRegex = new RegExp(`^${escapeRegExp(normalizedGroup)}$`, "i");
 
@@ -66,8 +66,7 @@ async function saveAndNotify(ctx, studentName, rawGroupName, comment = "") {
     const pendingRequest = await CoddyAttendance.findOne({
       studentName: studentNameRegex,
       studentGroup: groupNameRegex,
-      requestType: { $in: ["call_extra", "keep"] },
-      callConfirmed: false,
+      requestType: "talk_request",
       status: "Kutilmoqda"
     })
       .sort({ createdAt: -1 })
@@ -75,30 +74,7 @@ async function saveAndNotify(ctx, studentName, rawGroupName, comment = "") {
 
     if (pendingRequest) {
       await ctx.reply(
-        "⚠️ Bu o'quvchingiz hozirda so'rov holatida turibti.\nChaqirilganda sizga xabar beramiz.",
-        mainKeyboard(ctx)
-      );
-      return ctx.scene.leave();
-    }
-
-    const pendingCalled = await CoddyAttendance.findOne({
-      studentName: studentNameRegex,
-      studentGroup: groupNameRegex,
-      requestType: { $in: ["call_extra", "keep"] },
-      callConfirmed: true,
-      status: "Kutilmoqda"
-    })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    if (pendingCalled) {
-      await ctx.reply(
-        [
-          "ℹ️ Bu o'quvchingiz allaqachon chaqirilgan.",
-          `Sana: ${pendingCalled.date || date}`,
-          `Vaqt: ${pendingCalled.time || "belgilanmagan"}`,
-          "Kelganida sizga xabar beramiz."
-        ].join("\n"),
+        "Bu o'quvchi bo'yicha ochiq murojat allaqachon yuborilgan.",
         mainKeyboard(ctx)
       );
       return ctx.scene.leave();
@@ -110,34 +86,32 @@ async function saveAndNotify(ctx, studentName, rawGroupName, comment = "") {
       studentName,
       studentGroup: normalizedGroup,
       mainTeacher: workerName,
-      topic,
+      topic: normalizedComment,
       status: "Kutilmoqda",
       requesterRole: workerRoleRaw,
       callConfirmed: false,
-      requestType,
+      requestType: "talk_request",
       date,
       time
     });
 
     await ctx.reply(
       [
-        "✅ So'rov yuborildi:",
-        `Turi: ${requestLabel}`,
+        "Murojat yuborildi:",
         `O'quvchi: ${studentName}`,
         `Guruh: ${rawGroupName}`,
-        ...(normalizedComment ? [`Izoh: ${normalizedComment}`] : []),
+        `Izoh: ${normalizedComment}`,
         `Vaqt: ${date} ${time}`
       ].join("\n"),
       mainKeyboard(ctx)
     );
 
     const notifyText = [
-      "📣 Botdan yangi chaqirish so'rovi",
+      "Botdan yangi murojat",
       `Kim: ${workerName} (${workerRole})`,
-      `Turi: ${requestLabel}`,
       `O'quvchi: ${studentName}`,
       `Guruh: ${rawGroupName}`,
-      ...(normalizedComment ? [`Izoh: ${normalizedComment}`] : []),
+      `Mentor izohi: ${normalizedComment}`,
       `Sana: ${date} ${time}`
     ].join("\n");
 
@@ -149,20 +123,18 @@ async function saveAndNotify(ctx, studentName, rawGroupName, comment = "") {
       }
     }
   } catch (error) {
-    console.error("call request save error:", error);
-    await ctx.reply("So'rovni saqlashda xatolik yuz berdi.", mainKeyboard(ctx));
+    console.error("talk request save error:", error);
+    await ctx.reply("Murojatni saqlashda xatolik yuz berdi.", mainKeyboard(ctx));
   }
 
   return ctx.scene.leave();
 }
 
-const callRequestScene = new WizardScene(
-  "coddy_call_request_wizard",
+const talkRequestScene = new WizardScene(
+  "coddy_talk_request_wizard",
 
-  // Step 0 - Entry: show mentor's groups or go straight to manual
+  // Step 0 - Entry: show mentor groups or go full manual
   async (ctx) => {
-    ctx.wizard.state.requestType = "call_extra";
-
     const workerName =
       ctx.state?.worker?.fullName || ctx.from.first_name || ctx.from.username || "";
 
@@ -271,7 +243,7 @@ const callRequestScene = new WizardScene(
       if (!text) return ctx.reply("O'quvchi ismini kiriting.");
       ctx.wizard.state.studentName = text;
       ctx.wizard.state.finalGroupName = ctx.wizard.state.groupName;
-      await askOptionalComment(ctx);
+      await askMandatoryComment(ctx);
       ctx.wizard.next(); // 2->3
       return ctx.wizard.next(); // 3->4
     }
@@ -286,35 +258,38 @@ const callRequestScene = new WizardScene(
       if (!text) return ctx.reply("O'quvchini tanlang yoki ismini kiriting.");
       ctx.wizard.state.studentName = text;
       ctx.wizard.state.finalGroupName = ctx.wizard.state.groupName;
-      await askOptionalComment(ctx);
+      await askMandatoryComment(ctx);
       ctx.wizard.next(); // 2->3
       return ctx.wizard.next(); // 3->4
     }
   },
 
-  // Step 3 - Manual group name (only for full manual flow)
+  // Step 3 - Manual group name (manual flow only)
   async (ctx) => {
     if (ctx.message?.text === CANCEL_BTN) return cancelAndExit(ctx);
 
     const flow = ctx.wizard.state.flow;
     if (flow !== "manual") {
-      return; // skipped via double-next for non-manual flows
+      return; // skipped via double-next
     }
 
     const studentGroup = String(ctx.message?.text || "").trim();
     if (!studentGroup) return ctx.reply("Guruhini kiriting.");
 
     ctx.wizard.state.finalGroupName = studentGroup;
-    await askOptionalComment(ctx);
+    await askMandatoryComment(ctx);
     return ctx.wizard.next(); // 3->4
   },
 
-  // Step 4 - Optional comment and save
+  // Step 4 - Mandatory comment and save
   async (ctx) => {
     if (ctx.message?.text === CANCEL_BTN) return cancelAndExit(ctx);
 
-    const text = String(ctx.message?.text || "").trim();
-    const comment = text === SKIP_COMMENT_BTN ? "" : text;
+    const comment = normalizeCompactText(ctx.message?.text);
+    if (!comment) {
+      await ctx.reply("Murojat matnini kiriting.");
+      return;
+    }
 
     return saveAndNotify(
       ctx,
@@ -325,6 +300,6 @@ const callRequestScene = new WizardScene(
   }
 );
 
-callRequestScene.hears(CANCEL_BTN, (ctx) => cancelAndExit(ctx));
+talkRequestScene.hears(CANCEL_BTN, (ctx) => cancelAndExit(ctx));
 
-module.exports = callRequestScene;
+module.exports = talkRequestScene;

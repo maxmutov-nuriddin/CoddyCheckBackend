@@ -95,6 +95,7 @@ async function startCoddyCheckBot() {
 
   const attendanceScene = require("./scenes/attendanceScene");
   const callRequestScene = require("./scenes/callRequestScene");
+  const talkRequestScene = require("./scenes/talkRequestScene");
   const reportScene = require("./scenes/reportScene");
   const settingsScene = require("./scenes/settingsScene");
   const searchScene = require("./scenes/searchScene");
@@ -105,6 +106,7 @@ async function startCoddyCheckBot() {
   const stage = new Scenes.Stage([
     attendanceScene,
     callRequestScene,
+    talkRequestScene,
     reportScene,
     settingsScene,
     searchScene,
@@ -155,6 +157,17 @@ async function startCoddyCheckBot() {
     return ctx.scene.enter("coddy_call_request_wizard");
   });
 
+  coddyBot.hears("💬 Murojat", (ctx) => {
+    if (!canUseCallRequest(ctx)) {
+      return ctx.reply(
+        "Bu tugma faqat Mentor va Mentor+TA uchun.\n\n" +
+        "Quyidagi komandaga bosing:\n" +
+        "/start"
+      );
+    }
+    return ctx.scene.enter("coddy_talk_request_wizard");
+  });
+
   coddyBot.hears("➕ O'quvchi qo'shish", (ctx) => ctx.scene.enter("coddy_attendance_wizard"));
   coddyBot.hears("⚙️ Sozlamalar", (ctx) => ctx.scene.enter("coddy_settings_scene"));
   coddyBot.hears("ℹ️ Yordam", (ctx) => {
@@ -165,6 +178,8 @@ async function startCoddyCheckBot() {
       text =
         "📣 O'quvchi chaqirish:\n" +
         "Darsga kelmagan o'quvchini chaqirish uchun '📣 O'quvchi chaqirish' tugmasini bosing va ko'rsatmalarga amal qiling.\n\n" +
+        "💬 Murojat:\n" +
+        "Kuratorga o'quvchi bo'yicha murojat yuborish uchun '💬 Murojat' tugmasini bosing.\n\n" +
         "Har qanday vaziyat uchun: /start\n\n" +
         "Shikoyat va takliflar uchun: @mv_nuriddin";
     } else if (role === "ta") {
@@ -177,6 +192,8 @@ async function startCoddyCheckBot() {
       text =
         "📣 O'quvchi chaqirish:\n" +
         "Darsga kelmagan o'quvchini chaqirish uchun '📣 O'quvchi chaqirish' tugmasini bosing va ko'rsatmalarga amal qiling.\n\n" +
+        "💬 Murojat:\n" +
+        "Kuratorga o'quvchi bo'yicha murojat yuborish uchun '💬 Murojat' tugmasini bosing.\n\n" +
         "➕ O'quvchi qo'shish:\n" +
         "Kelgan o'quvchini davomatga qo'shish uchun '➕ O'quvchi qo'shish' tugmasini bosing.\n\n" +
         "Har qanday vaziyat uchun: /start\n\n" +

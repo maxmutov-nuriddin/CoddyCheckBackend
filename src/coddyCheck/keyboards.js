@@ -1,5 +1,6 @@
 ﻿const mentorMainKeyboard = [
   ["📣 O'quvchi chaqirish"],
+  ["💬 Murojat"],
   ["⚙️ Sozlamalar", "ℹ️ Yordam"]
 ];
 
@@ -10,6 +11,7 @@ const taMainKeyboard = [
 
 const mentorTaMainKeyboard = [
   ["📣 O'quvchi chaqirish", "➕ O'quvchi qo'shish"],
+  ["💬 Murojat"],
   ["⚙️ Sozlamalar", "ℹ️ Yordam"]
 ];
 
@@ -42,3 +44,4 @@ module.exports = {
   adminMainKeyboard,
   getWorkerMainKeyboard
 };
+

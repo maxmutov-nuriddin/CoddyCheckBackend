@@ -39,7 +39,7 @@ const coddyAttendanceSchema = new mongoose.Schema(
     },
     requestType: {
       type: String,
-      enum: ["mark", "call_extra", "keep"],
+      enum: ["mark", "call_extra", "keep", "talk_request"],
       default: "mark"
     },
     requesterRole: {

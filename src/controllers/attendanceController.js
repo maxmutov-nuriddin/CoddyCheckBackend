@@ -1,5 +1,6 @@
 ﻿const Attendance = require("../models/Attendance");
 const Student = require("../models/Student");
+const Group = require("../models/Group");
 const CalledStudent = require("../models/CalledStudent");
 const StudentTalk = require("../models/StudentTalk");
 const TaNotificationTask = require("../models/TaNotificationTask");
@@ -256,6 +257,178 @@ async function syncCalledStudentStatus({ studentId, date, status }) {
   return calledRecord;
 }
 
+function normalizeCompactText(value) {
+  return String(value || "").trim().replace(/\s+/g, " ");
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function mapStatusLabelToCalledStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "keldi") return "keldi";
+  if (normalized === "kelmadi") return "kelmadi";
+  if (normalized === "kutilmoqda" || normalized === "pending") return "pending";
+  return null;
+}
+
+async function syncBotCallActivityToCalledStudent(botRow, changes = {}) {
+  const requestType = String(botRow?.requestType || "").toLowerCase();
+  if (!["call_extra", "keep"].includes(requestType)) return null;
+
+  const studentName = normalizeCompactText(botRow?.studentName);
+  if (!studentName) return null;
+
+  const targetDateRaw = normalizeCompactText(
+    typeof changes.date !== "undefined" && changes.date ? changes.date : botRow?.date
+  );
+  if (!targetDateRaw || targetDateRaw === "-") return null;
+
+  let targetDay = null;
+  try {
+    targetDay = getDayBounds(targetDateRaw).start;
+  } catch {
+    return null;
+  }
+
+  const statusLabel = typeof changes.status !== "undefined" ? changes.status : botRow?.status;
+  const mappedStatus = mapStatusLabelToCalledStatus(statusLabel) || "pending";
+  const isResolved = mappedStatus === "keldi" || mappedStatus === "kelmadi";
+  const callConfirmedFlag =
+    typeof changes.callConfirmed !== "undefined"
+      ? Boolean(changes.callConfirmed)
+      : Boolean(botRow?.callConfirmed);
+
+  // Do not track plain bot "So'rov" rows in CalledStudent history
+  // until they are confirmed (or resolved manually to keldi/kelmadi).
+  if (!callConfirmedFlag && !isResolved) {
+    return null;
+  }
+  const timeValue = normalizeCompactText(typeof changes.time !== "undefined" ? changes.time : botRow?.time);
+  const commentValue = normalizeCompactText(typeof changes.comment !== "undefined" ? changes.comment : botRow?.topic);
+
+  const fullNameRegex = new RegExp(`^${escapeRegExp(studentName)}$`, "i");
+  const candidates = await Student.find({ fullName: fullNameRegex, isActive: true })
+    .select("_id groupId")
+    .lean();
+  if (!candidates.length) return null;
+
+  let targetStudent = candidates[0];
+  if (candidates.length > 1) {
+    const candidateIds = candidates.map((item) => item._id);
+    const preferred = await CalledStudent.findOne({
+      studentId: { $in: candidateIds },
+      date: targetDay
+    }).select("studentId").lean();
+
+    if (preferred?.studentId) {
+      const matched = candidates.find((item) => String(item._id) === String(preferred.studentId));
+      if (matched) targetStudent = matched;
+    }
+  }
+
+  let record = await CalledStudent.findOne({ studentId: targetStudent._id, date: targetDay });
+
+  if (!record && changes.previousDate) {
+    try {
+      const previousDay = getDayBounds(changes.previousDate).start;
+      record = await CalledStudent.findOne({ studentId: targetStudent._id, date: previousDay });
+      if (record) {
+        record.date = targetDay;
+      }
+    } catch {
+      // ignore invalid previousDate format
+    }
+  }
+
+  if (!record) {
+    return CalledStudent.create({
+      studentId: targetStudent._id,
+      groupId: targetStudent.groupId || null,
+      date: targetDay,
+      callCount: 1,
+      calls: [{
+        time: timeValue,
+        comment: commentValue,
+        status: mappedStatus,
+        calledAt: new Date(),
+        resolvedAt: isResolved ? new Date() : null
+      }],
+      lastStatus: mappedStatus
+    });
+  }
+
+  if (!Array.isArray(record.calls)) {
+    record.calls = [];
+  }
+
+  if (record.calls.length === 0) {
+    record.calls.push({
+      time: timeValue,
+      comment: commentValue,
+      status: mappedStatus,
+      calledAt: new Date(),
+      resolvedAt: isResolved ? new Date() : null
+    });
+    record.callCount = Math.max(Number(record.callCount) || 0, 1);
+  } else {
+    const lastCall = record.calls[record.calls.length - 1];
+    if (typeof changes.time !== "undefined") {
+      lastCall.time = timeValue;
+    }
+    if (typeof changes.comment !== "undefined") {
+      lastCall.comment = commentValue;
+    }
+    if (typeof changes.status !== "undefined") {
+      lastCall.status = mappedStatus;
+      lastCall.resolvedAt = isResolved ? new Date() : null;
+    }
+  }
+
+  if (typeof changes.status !== "undefined") {
+    record.lastStatus = mappedStatus;
+  } else if (!record.lastStatus) {
+    record.lastStatus = "pending";
+  }
+
+  if (!record.groupId && targetStudent.groupId) {
+    record.groupId = targetStudent.groupId;
+  }
+
+  await record.save();
+  return record;
+}
+
+async function reconcileBotCallsToCalledStudentsByDate(dateInput) {
+  let day;
+  try {
+    day = getDayBounds(dateInput).start;
+  } catch {
+    return;
+  }
+
+  const ymd = formatYMD(day);
+  const botRows = await CoddyAttendance.find({
+    requestType: { $in: ["call_extra", "keep"] },
+    date: ymd,
+    $or: [
+      { callConfirmed: true },
+      { status: { $in: ["Keldi", "Kelmadi"] } }
+    ]
+  }).lean();
+
+  if (!botRows.length) return;
+
+  for (const row of botRows) {
+    try {
+      await syncBotCallActivityToCalledStudent(row);
+    } catch (error) {
+      console.error("Failed to reconcile bot call row to CalledStudent:", error.message);
+    }
+  }
+}
+
 const manualAttendance = asyncHandler(async (req, res) => {
   const { studentId, date, attendanceStatus, comment = "" } = req.body;
 
@@ -448,31 +621,42 @@ const callStudent = asyncHandler(async (req, res) => {
 
   const normalizedDate = normalizeDateOnly(date);
   const dayStr = formatYMD(normalizedDate);
+  const { start, end } = getDayBounds(normalizedDate);
 
-  // Duplicate check Web: Verify if student already has a record for this date
-  const existingWeb = await Attendance.findOne({ studentId, date: normalizedDate });
-  if (existingWeb) {
-    if (existingWeb.attendanceStatus) {
-      // It has a final mark (Keldi/Kelmadi), block.
-      throw new ApiError(400, `Bu o'quvchi bugun uchun allaqachon belgilangan (${existingWeb.attendanceStatus}).`);
-    }
-    // It's just a call record, allow updating it
-    existingWeb.time = buildDateTime(normalizedDate, time);
-    existingWeb.comment = comment || existingWeb.comment;
-    existingWeb.mentorId = req.user._id;
-    await existingWeb.save();
-    return ok(res, existingWeb, "Attendance call updated");
+  // Only one active (pending) call is allowed per student per day.
+  // If previous calls are finalized (keldi/kelmadi), a new call is allowed.
+  const pendingWebCall = await Attendance.findOne({
+    studentId,
+    date: { $gte: start, $lte: end },
+    callStatus: "chaqirilgan",
+    attendanceStatus: null
+  }).sort({ createdAt: -1 });
 
+  if (pendingWebCall) {
+    throw new ApiError(400, "Bu o'quvchi shu sana uchun allaqachon chaqirilgan (Kutilmoqda). Avval statusni belgilang.");
   }
 
-  // Duplicate check Bot: Verify if student is already in bot activity for this date
-  const existingBot = await CoddyAttendance.findOne({
+  // Duplicate check Bot call requests for this date: So'rov or Kutilmoqda -> block.
+  const pendingBotCall = await CoddyAttendance.findOne({
     studentName: student.fullName,
     date: dayStr,
-    requestType: "mark"
+    requestType: { $in: ["call_extra", "keep"] },
+    $or: [{ callConfirmed: false }, { status: "Kutilmoqda" }]
   });
-  if (existingBot) {
-    throw new ApiError(400, `Bu o'quvchi bot orqali allaqachon belgilangan.`);
+
+  if (pendingBotCall) {
+    throw new ApiError(400, "Bu o'quvchi shu sana uchun botda allaqachon So'rov/Kutilmoqda holatda.");
+  }
+
+  // Bot "mark" rows are blocked only while pending.
+  const pendingBotMark = await CoddyAttendance.findOne({
+    studentName: student.fullName,
+    date: dayStr,
+    requestType: "mark",
+    status: "Kutilmoqda"
+  });
+  if (pendingBotMark) {
+    throw new ApiError(400, "Bu o'quvchi bot orqali shu sana uchun Kutilmoqda holatda.");
   }
 
   const parsedTime = buildDateTime(normalizedDate, time);
@@ -886,7 +1070,10 @@ const deleteActivity = asyncHandler(async (req, res) => {
   if (id.startsWith("bot-")) {
     const coddyId = id.slice(4);
     const request = await CoddyAttendance.findById(coddyId);
-    if (request && request.callConfirmed === false && request.teacherId) {
+    const requestType = String(request?.requestType || "").toLowerCase();
+    const isCallRequest = requestType === "call_extra" || requestType === "keep";
+    const isTalkRequest = requestType === "talk_request";
+    if (request && isCallRequest && request.callConfirmed === false && request.teacherId) {
       const bot = getBotInstance();
       if (bot) {
         const message = [
@@ -900,6 +1087,20 @@ const deleteActivity = asyncHandler(async (req, res) => {
 
         bot.telegram.sendMessage(request.teacherId, message, { parse_mode: "Markdown" }).catch((err) => {
           console.error(`Failed to notify rejection to ${request.teacherId}:`, err.message);
+        });
+      }
+    }
+    if (request && isTalkRequest && request.teacherId) {
+      const bot = getBotInstance();
+      if (bot) {
+        const message = [
+          "❌ Murojatingiz qabul qilinmadi.",
+          `O'quvchi: ${request.studentName || "-"}`,
+          `Guruh: ${request.studentGroup || "-"}`
+        ].join("\n");
+
+        bot.telegram.sendMessage(request.teacherId, message).catch((err) => {
+          console.error(`Failed to notify talk rejection to ${request.teacherId}:`, err.message);
         });
       }
     }
@@ -1021,8 +1222,8 @@ const getAllActivity = asyncHandler(async (req, res) => {
 const getBotCalls = asyncHandler(async (req, res) => {
   const { sort = "date-desc", date } = req.query;
 
-  // Only oquvchi_chaqirish records (call_extra, keep) — NOT shown in So'nggi faollik
-  const coddyQuery = { requestType: { $in: ["call_extra", "keep"] } };
+  // oquvchi_chaqirish + murojat records — NOT shown in So'nggi faollik
+  const coddyQuery = { requestType: { $in: ["call_extra", "keep", "talk_request"] } };
 
   if (date) {
     const dateStr = formatYMD(date);
@@ -1088,6 +1289,20 @@ const createCalledStudent = asyncHandler(async (req, res) => {
   if (!student) throw new ApiError(404, "Student not found");
 
   const normalizedDate = normalizeDateOnly(date);
+  const existingRecord = await CalledStudent.findOne({ studentId, date: normalizedDate });
+  if (existingRecord) {
+    const latestCall = Array.isArray(existingRecord.calls) && existingRecord.calls.length > 0
+      ? existingRecord.calls[existingRecord.calls.length - 1]
+      : null;
+    const hasPending =
+      existingRecord.lastStatus === "pending" ||
+      String(latestCall?.status || "").toLowerCase() === "pending";
+
+    if (hasPending) {
+      throw new ApiError(400, "Bu o'quvchi shu sana uchun allaqachon chaqirilgan (Kutilmoqda).");
+    }
+  }
+
   const callEntry = {
     time: String(time || "").trim(),
     comment: String(comment || "").trim(),
@@ -1137,6 +1352,111 @@ const createStudentTalk = asyncHandler(async (req, res) => {
   return ok(res, record, "Student talk saved");
 });
 
+const resolveBotTalkRequest = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { curatorComment = "" } = req.body;
+
+  const request = await CoddyAttendance.findById(id);
+  if (!request) {
+    throw new ApiError(404, "Bot so'rovi topilmadi");
+  }
+
+  if (String(request.requestType || "").toLowerCase() !== "talk_request") {
+    throw new ApiError(400, "Faqat murojat so'rovi uchun ruxsat berilgan");
+  }
+
+  const mentorComment = normalizeCompactText(request.topic);
+  if (!mentorComment) {
+    throw new ApiError(400, "Mentor izohi topilmadi");
+  }
+
+  const studentName = normalizeCompactText(request.studentName);
+  if (!studentName) {
+    throw new ApiError(400, "O'quvchi nomi topilmadi");
+  }
+
+  const studentNameRegex = new RegExp(`^${escapeRegExp(studentName)}$`, "i");
+  const candidates = await Student.find({ fullName: studentNameRegex, isActive: true })
+    .select("_id groupId fullName")
+    .lean();
+
+  if (!candidates.length) {
+    throw new ApiError(404, "Murojat uchun o'quvchi topilmadi");
+  }
+
+  let targetStudent = candidates[0];
+  if (candidates.length > 1) {
+    const groupName = normalizeCompactText(request.studentGroup);
+    if (groupName) {
+      const groupRegex = new RegExp(`^${escapeRegExp(groupName)}$`, "i");
+      const matchedGroups = await Group.find({ name: groupRegex }).select("_id").lean();
+      if (matchedGroups.length > 0) {
+        const matchedGroupIds = new Set(matchedGroups.map((g) => String(g._id)));
+        const byGroup = candidates.find((s) => s.groupId && matchedGroupIds.has(String(s.groupId)));
+        if (byGroup) {
+          targetStudent = byGroup;
+        }
+      }
+    }
+  }
+
+  let talkDate = normalizeDateOnly(new Date());
+  if (request.date) {
+    try {
+      talkDate = normalizeDateOnly(request.date);
+    } catch {
+      // keep today
+    }
+  }
+
+  const curatorCommentText = normalizeCompactText(curatorComment);
+  const mergedComment = curatorCommentText
+    ? `Mentor murojati: ${mentorComment}\nKurator izohi: ${curatorCommentText}`
+    : `Mentor murojati: ${mentorComment}`;
+
+  const talkEntry = {
+    date: talkDate,
+    comment: mergedComment,
+    createdAt: new Date()
+  };
+
+  const talkRecord = await StudentTalk.findOneAndUpdate(
+    { studentId: targetStudent._id },
+    {
+      $inc: { talkCount: 1 },
+      $push: { talks: talkEntry },
+      $setOnInsert: { groupId: targetStudent.groupId || undefined }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+
+  if (request.teacherId) {
+    const bot = getBotInstance();
+    if (bot) {
+      const deliveredMessage = [
+        "✅ Murojatingiz yetqazildi.",
+        `O'quvchi: ${request.studentName || "-"}`,
+        `Guruh: ${request.studentGroup || "-"}`
+      ].join("\n");
+
+      bot.telegram.sendMessage(request.teacherId, deliveredMessage).catch((err) => {
+        console.error(`Failed to notify talk delivery to ${request.teacherId}:`, err.message);
+      });
+    }
+  }
+
+  await CoddyAttendance.findByIdAndDelete(id);
+
+  return ok(
+    res,
+    {
+      removedRequestId: id,
+      talkRecord
+    },
+    "Murojat gaplashildi holatiga o'tkazildi"
+  );
+});
+
 const getStudentTalks = asyncHandler(async (req, res) => {
   const { studentId, studentIds } = req.query;
   const filter = {};
@@ -1181,12 +1501,53 @@ const getStudentTalks = asyncHandler(async (req, res) => {
   return ok(res, normalizedRows, "Student talks list");
 });
 
+const deleteStudentTalkEntry = asyncHandler(async (req, res) => {
+  const { recordId, talkId } = req.params;
+
+  if (!recordId || !talkId) {
+    throw new ApiError(400, "recordId and talkId are required");
+  }
+
+  const record = await StudentTalk.findById(recordId);
+  if (!record) {
+    throw new ApiError(404, "Student talk record not found");
+  }
+
+  const talkEntry = record.talks.id(talkId);
+  if (!talkEntry) {
+    throw new ApiError(404, "Talk entry not found");
+  }
+
+  const createdAt = talkEntry.createdAt ? new Date(talkEntry.createdAt) : new Date(talkEntry.date);
+  if (Number.isNaN(createdAt.getTime())) {
+    throw new ApiError(400, "Talk entry time is invalid");
+  }
+
+  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+  if (Date.now() - createdAt.getTime() > TWENTY_FOUR_HOURS_MS) {
+    throw new ApiError(400, "Talk yozuvini faqat 24 soat ichida o'chirish mumkin");
+  }
+
+  talkEntry.deleteOne();
+
+  if (!record.talks.length) {
+    await StudentTalk.findByIdAndDelete(recordId);
+    return ok(res, { removedRecord: true, recordId }, "Talk entry deleted");
+  }
+
+  record.talkCount = record.talks.length;
+  await record.save();
+
+  return ok(res, { removedRecord: false, record }, "Talk entry deleted");
+});
+
 const getCalledStudents = asyncHandler(async (req, res) => {
   const date = req.query.date;
   const studentIds = parseObjectIdCsv(req.query.studentIds);
   const liteMode = isAttendanceLiteRequest(req);
   let filter = {};
   if (date) {
+    await reconcileBotCallsToCalledStudentsByDate(date);
     const { start, end } = getDayBounds(date);
     filter = { date: { $gte: start, $lte: end } };
   }
@@ -1219,19 +1580,29 @@ const updateActivity = asyncHandler(async (req, res) => {
 
   if (id.startsWith("bot-")) {
     const botId = id.slice(4);
-    const updateData = {};
-    if (typeof comment !== "undefined") updateData.topic = comment;
-    if (typeof status !== "undefined") updateData.status = status;
+    const row = await CoddyAttendance.findById(botId);
+    if (!row) throw new ApiError(404, "Bot activity not found");
+
+    const previousDate = row.date;
+
+    if (typeof comment !== "undefined") row.topic = comment;
+    if (typeof status !== "undefined") row.status = status;
     if (typeof date !== "undefined" && date) {
-      updateData.date = formatYMD(getDayBounds(date).start);
+      row.date = formatYMD(getDayBounds(date).start);
     }
     if (typeof time !== "undefined") {
-      updateData.time = time;
+      row.time = time;
     }
 
-    const updated = await CoddyAttendance.findByIdAndUpdate(botId, updateData, { new: true });
-    if (!updated) throw new ApiError(404, "Bot activity not found");
-    return ok(res, updated, "Bot activity updated");
+    await row.save();
+
+    try {
+      await syncBotCallActivityToCalledStudent(row, { comment, status, date, time, previousDate });
+    } catch (syncError) {
+      console.error("Failed to sync bot activity to CalledStudent:", syncError.message);
+    }
+
+    return ok(res, row, "Bot activity updated");
   } else if (id.startsWith("web-")) {
     const webId = id.slice(4);
     const updateData = {};
@@ -1358,8 +1729,10 @@ module.exports = {
   getBotCalls,
   createCalledStudent,
   createStudentTalk,
+  resolveBotTalkRequest,
   getCalledStudents,
   getStudentTalks,
+  deleteStudentTalkEntry,
   deleteCalledStudent,
   updateActivity,
   updateCalledStudent

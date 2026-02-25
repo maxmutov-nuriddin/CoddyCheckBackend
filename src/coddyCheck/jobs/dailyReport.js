@@ -22,6 +22,22 @@ function toComparableTelegramIds(value) {
   return Array.from(set);
 }
 
+async function loadKuratorComparableIdSet() {
+  const kurators = await User.find({
+    role: "kurator",
+    isActive: true,
+    telegramId: { $nin: [null, ""] }
+  })
+    .select("telegramId")
+    .lean();
+
+  const set = new Set();
+  kurators.forEach((kurator) => {
+    toComparableTelegramIds(kurator.telegramId).forEach((id) => set.add(id));
+  });
+  return set;
+}
+
 function statusKey(value) {
   const s = String(value || "").trim().toLowerCase();
   if (s === "keldi") return "keldi";
@@ -94,22 +110,24 @@ function buildKuratorDetailedReport(dateStr, records) {
     });
   }
 
-  // TA bo'yicha statistika
+  // Mentor bo'yicha kelganlar statistikasi
   lines.push("");
-  lines.push("👥 <b>TA bo'yicha statistika:</b>");
+  lines.push("👨‍🏫 <b>Mentor bo'yicha (Keldi):</b>");
 
-  const taCountMap = new Map();
-  markRecords.forEach(r => {
-    const name = r.teacherName || "Noma'lum";
-    taCountMap.set(name, (taCountMap.get(name) || 0) + 1);
-  });
+  const mentorCountMap = new Map();
+  markRecords
+    .filter((r) => statusKey(r.status) === "keldi")
+    .forEach((r) => {
+      const name = String(r.mainTeacher || "Noma'lum mentor").trim() || "Noma'lum mentor";
+      mentorCountMap.set(name, (mentorCountMap.get(name) || 0) + 1);
+    });
 
-  if (taCountMap.size === 0) {
+  if (mentorCountMap.size === 0) {
     lines.push("— Ma'lumot yo'q");
   } else {
-    const sorted = [...taCountMap.entries()].sort((a, b) => b[1] - a[1]);
+    const sorted = [...mentorCountMap.entries()].sort((a, b) => b[1] - a[1]);
     sorted.forEach(([name, count], idx) => {
-      lines.push(`${idx + 1}. ${name} — ${count} ta o'quvchi`);
+      lines.push(`${idx + 1}. ${name} — ${count} ta kelgan o'quvchi`);
     });
   }
 
@@ -186,8 +204,11 @@ async function sendDailyReport(bot) {
     const dateStr = now.toFormat("yyyy-MM-dd");
     const records = await CoddyAttendance.find({ date: dateStr }).sort({ teacherName: 1, time: 1, createdAt: 1 });
 
-    // Admin uchun qisqacha hisobot (avvalgidek)
-    const adminIds = [...new Set((env.coddyAdminIds || []).map(normalizeTelegramId).filter(Boolean))];
+    // Admin uchun qisqacha hisobot:
+    // Kuratorlar alohida batafsil hisobot oladi, shu sabab bu qisqa TA hisobot ularga yuborilmaydi.
+    const kuratorIdSet = await loadKuratorComparableIdSet();
+    const adminIds = [...new Set((env.coddyAdminIds || []).map(normalizeTelegramId).filter(Boolean))]
+      .filter((id) => !toComparableTelegramIds(id).some((candidate) => kuratorIdSet.has(candidate)));
     if (adminIds.length) {
       const adminMessage = records.length
         ? buildTaSummaryReport(dateStr, records)
