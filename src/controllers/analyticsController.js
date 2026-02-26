@@ -610,6 +610,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
       invitedAttended: 0,
       totalAttended: r.totalAttended || 0
     }));
+
     perMentorBotAgg.forEach((r) => {
       const existing = perMentorAttMap.get(r._id) || { invited: 0, invitedAttended: 0, totalAttended: 0 };
       perMentorAttMap.set(r._id, {
@@ -618,12 +619,13 @@ const getAnalytics = asyncHandler(async (req, res) => {
         totalAttended: (existing.totalAttended || 0) + (r.totalAttended || 0)
       });
     });
+
     perMentorPlatformCallAgg.forEach((r) => {
       const existing = perMentorAttMap.get(r._id) || { invited: 0, invitedAttended: 0, totalAttended: 0 };
       perMentorAttMap.set(r._id, {
         invited: (r.invited || 0),
         invitedAttended: (r.invitedAttended || 0),
-        totalAttended: existing.totalAttended || 0
+        totalAttended: (existing.totalAttended || 0) + (r.totalAttended || 0)
       });
     });
 
