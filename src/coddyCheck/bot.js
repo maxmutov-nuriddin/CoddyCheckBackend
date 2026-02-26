@@ -100,6 +100,8 @@ async function startCoddyCheckBot() {
   const settingsScene = require("./scenes/settingsScene");
   const searchScene = require("./scenes/searchScene");
   const editScene = require("./scenes/editScene");
+  const messageScene = require("./scenes/messageScene");
+  const kuratorReplyScene = require("./scenes/kuratorReplyScene");
 
   coddyBot = new Telegraf(env.coddyBotToken);
 
@@ -110,7 +112,9 @@ async function startCoddyCheckBot() {
     reportScene,
     settingsScene,
     searchScene,
-    editScene
+    editScene,
+    messageScene,
+    kuratorReplyScene
   ]);
   coddyBot.use(session());
 
@@ -169,8 +173,10 @@ async function startCoddyCheckBot() {
   });
 
   coddyBot.hears("➕ O'quvchi qo'shish", (ctx) => ctx.scene.enter("coddy_attendance_wizard"));
+
   coddyBot.hears("⚙️ Sozlamalar", (ctx) => ctx.scene.enter("coddy_settings_scene"));
   coddyBot.hears("ℹ️ Yordam", (ctx) => {
+    const { Markup } = require("telegraf");
     const role = String(ctx.state?.worker?.role || "").toLowerCase();
     let text;
 
@@ -206,7 +212,14 @@ async function startCoddyCheckBot() {
         "Shikoyat va takliflar uchun: @mv_nuriddin";
     }
 
-    return ctx.reply(text);
+    return ctx.reply(text, Markup.inlineKeyboard([
+      Markup.button.callback("📨 Kuratorga xabar yuborish", "msg_kur")
+    ]));
+  });
+
+  coddyBot.action("msg_kur", (ctx) => {
+    ctx.answerCbQuery();
+    return ctx.scene.enter("coddy_message_scene");
   });
 
   coddyBot.hears("📊 Hisobot", (ctx) => {
@@ -227,6 +240,13 @@ async function startCoddyCheckBot() {
       }
     })
   );
+
+  // Kurator "Javob yozish" tugmasini bosganida
+  coddyBot.action(/^kr:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery("Javob yozish...");
+    const replyTo = ctx.match[1];
+    return ctx.scene.enter("kurator_reply_scene", { replyTo });
+  });
 
   coddyBot.action(/^coddy_delete_mark_(.+)$/, teacherController.deleteMark);
   coddyBot.action(/^coddy_edit_mark_(.+)$/, teacherController.editMark);
