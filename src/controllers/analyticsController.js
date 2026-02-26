@@ -171,6 +171,13 @@ function findBestUnusedKey(workerName, keys, usedKeys) {
   return bestScore >= 100 ? bestKey : null;
 }
 
+function uniqueSortedNames(items) {
+  const normalized = (items || [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  return Array.from(new Set(normalized)).sort((a, b) => a.localeCompare(b));
+}
+
 const getAnalytics = asyncHandler(async (req, res) => {
   try {
     const { dateFrom, dateTo } = req.query;
@@ -241,6 +248,9 @@ const getAnalytics = asyncHandler(async (req, res) => {
       perMentorBotAgg,
       perMentorPlatformCallAgg,
       studentsByMentorAgg,
+      perMentorAttDetailAgg,
+      perMentorBotDetailAgg,
+      perMentorPlatformDetailAgg,
       taEntriesAgg,
       trendAgg,
       trendBotAgg,
@@ -293,12 +303,21 @@ const getAnalytics = asyncHandler(async (req, res) => {
 
       CalledStudent.aggregate([
         { $match: attMatch },
+        // Birinchi: har bir o'quvchi uchun dedup (bir o'quvchi turli kunlarda chaqirilsa — bitta hisoblansin)
+        {
+          $group: {
+            _id: "$studentId",
+            isInvited: { $max: { $cond: [{ $in: ["$lastStatus", ["keldi", "kelmadi", "pending"]] }, 1, 0] } },
+            isAttended: { $max: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } }
+          }
+        },
+        // Ikkinchi: jami hisob
         {
           $group: {
             _id: null,
-            invited: { $sum: "$callCount" },
-            invitedAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } },
-            totalAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } }
+            invited: { $sum: "$isInvited" },
+            invitedAttended: { $sum: "$isAttended" },
+            totalAttended: { $sum: "$isAttended" }
           }
         }
       ]),
@@ -333,12 +352,24 @@ const getAnalytics = asyncHandler(async (req, res) => {
         { $match: attMatch },
         { $lookup: { from: "groups", localField: "groupId", foreignField: "_id", as: "grp" } },
         { $unwind: { path: "$grp", preserveNullAndEmptyArrays: true } },
+        // Birinchi: (mentor, studentId) bo'yicha dedup — bir o'quvchi turli kunlarda chaqirilsa bitta hisoblansin
         {
           $group: {
-            _id: { $toLower: { $ifNull: ["$grp.mentor", "noma'lum"] } },
-            invited: { $sum: "$callCount" },
-            invitedAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } },
-            totalAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } }
+            _id: {
+              mentor: { $toLower: { $ifNull: ["$grp.mentor", "noma'lum"] } },
+              studentId: "$studentId"
+            },
+            isInvited: { $max: { $cond: [{ $in: ["$lastStatus", ["keldi", "kelmadi", "pending"]] }, 1, 0] } },
+            isAttended: { $max: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } }
+          }
+        },
+        // Ikkinchi: mentor bo'yicha jami hisob
+        {
+          $group: {
+            _id: "$_id.mentor",
+            invited: { $sum: "$isInvited" },
+            invitedAttended: { $sum: "$isAttended" },
+            totalAttended: { $sum: "$isAttended" }
           }
         }
       ]),
@@ -357,6 +388,113 @@ const getAnalytics = asyncHandler(async (req, res) => {
             lead: { $sum: { $cond: [{ $eq: ["$frozenStatus", "lead"] }, 1, 0] } },
             poor: { $sum: { $cond: [{ $eq: ["$frozenStatus", "poor"] }, 1, 0] } },
             freeze: { $sum: { $cond: [{ $in: ["$frozenStatus", FREEZE_STATUSES] }, 1, 0] } },
+            leadStudents: { $addToSet: { $cond: [{ $eq: ["$frozenStatus", "lead"] }, "$fullName", "$$REMOVE"] } },
+            freezeStudents: { $addToSet: { $cond: [{ $in: ["$frozenStatus", FREEZE_STATUSES] }, "$fullName", "$$REMOVE"] } },
+          }
+        }
+      ]),
+
+      Attendance.aggregate([
+        { $match: { ...attMatch, ...attNonKuratorMatch } },
+        { $lookup: { from: "groups", localField: "groupId", foreignField: "_id", as: "grp" } },
+        { $unwind: { path: "$grp", preserveNullAndEmptyArrays: true } },
+        { $lookup: { from: "students", localField: "studentId", foreignField: "_id", as: "stu" } },
+        { $unwind: { path: "$stu", preserveNullAndEmptyArrays: true } },
+        { $addFields: { studentName: { $trim: { input: { $ifNull: ["$stu.fullName", ""] } } } } },
+        {
+          $group: {
+            _id: { $toLower: { $ifNull: ["$grp.mentor", "noma'lum"] } },
+            invitedStudents: {
+              $addToSet: {
+                $cond: [
+                  { $and: [{ $eq: ["$callStatus", "chaqirilgan"] }, { $ne: ["$studentName", ""] }] },
+                  "$studentName",
+                  "$$REMOVE"
+                ]
+              }
+            },
+            attendedStudents: {
+              $addToSet: {
+                $cond: [
+                  { $and: [{ $eq: ["$attendanceStatus", "keldi"] }, { $ne: ["$studentName", ""] }] },
+                  "$studentName",
+                  "$$REMOVE"
+                ]
+              }
+            },
+          }
+        }
+      ]),
+
+      CoddyAttendance.aggregate([
+        { $match: { ...botMatch, ...botNonKuratorMatch } },
+        { $addFields: { studentNameTrimmed: { $trim: { input: { $ifNull: ["$studentName", ""] } } } } },
+        {
+          $group: {
+            _id: { $toLower: { $ifNull: ["$mainTeacher", "noma'lum"] } },
+            invitedStudents: {
+              $addToSet: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$callConfirmed", true] },
+                      { $in: ["$requestType", ["call_extra", "keep"]] },
+                      { $ne: ["$studentNameTrimmed", ""] }
+                    ]
+                  },
+                  "$studentNameTrimmed",
+                  "$$REMOVE"
+                ]
+              }
+            },
+            attendedStudents: {
+              $addToSet: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$requestType", "mark"] },
+                      { $eq: ["$status", "Keldi"] },
+                      { $ne: ["$webSync", true] },
+                      { $ne: ["$studentNameTrimmed", ""] }
+                    ]
+                  },
+                  "$studentNameTrimmed",
+                  "$$REMOVE"
+                ]
+              }
+            },
+          }
+        }
+      ]),
+
+      CalledStudent.aggregate([
+        { $match: attMatch },
+        { $lookup: { from: "groups", localField: "groupId", foreignField: "_id", as: "grp" } },
+        { $unwind: { path: "$grp", preserveNullAndEmptyArrays: true } },
+        { $lookup: { from: "students", localField: "studentId", foreignField: "_id", as: "stu" } },
+        { $unwind: { path: "$stu", preserveNullAndEmptyArrays: true } },
+        { $addFields: { studentName: { $trim: { input: { $ifNull: ["$stu.fullName", ""] } } } } },
+        {
+          $group: {
+            _id: { $toLower: { $ifNull: ["$grp.mentor", "noma'lum"] } },
+            invitedStudents: {
+              $addToSet: {
+                $cond: [
+                  { $and: [{ $in: ["$lastStatus", ["keldi", "kelmadi", "pending"]] }, { $ne: ["$studentName", ""] }] },
+                  "$studentName",
+                  "$$REMOVE"
+                ]
+              }
+            },
+            attendedStudents: {
+              $addToSet: {
+                $cond: [
+                  { $and: [{ $eq: ["$lastStatus", "keldi"] }, { $ne: ["$studentName", ""] }] },
+                  "$studentName",
+                  "$$REMOVE"
+                ]
+              }
+            },
           }
         }
       ]),
@@ -408,13 +546,23 @@ const getAnalytics = asyncHandler(async (req, res) => {
 
       CalledStudent.aggregate([
         { $match: trendPlatformMatch },
+        // Birinchi: (bucket, studentId) bo'yicha dedup — bir buckettagi bir o'quvchi bitta hisoblansin
         {
           $group: {
-            _id: trendGroupId,
-            invited: { $sum: "$callCount" },
-            invitedAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } },
-            totalAttended: { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } },
-            missed: { $sum: { $cond: [{ $eq: ["$lastStatus", "kelmadi"] }, 1, 0] } }
+            _id: { bucketId: trendGroupId, studentId: "$studentId" },
+            isInvited: { $max: { $cond: [{ $in: ["$lastStatus", ["keldi", "kelmadi", "pending"]] }, 1, 0] } },
+            isAttended: { $max: { $cond: [{ $eq: ["$lastStatus", "keldi"] }, 1, 0] } },
+            isMissed: { $max: { $cond: [{ $eq: ["$lastStatus", "kelmadi"] }, 1, 0] } }
+          }
+        },
+        // Ikkinchi: bucket bo'yicha jami hisob
+        {
+          $group: {
+            _id: "$_id.bucketId",
+            invited: { $sum: "$isInvited" },
+            invitedAttended: { $sum: "$isAttended" },
+            totalAttended: { $sum: "$isAttended" },
+            missed: { $sum: "$isMissed" }
           }
         },
         { $sort: trendSort }
@@ -438,10 +586,11 @@ const getAnalytics = asyncHandler(async (req, res) => {
     const gBot = globalBotAgg[0] || { invited: 0, invitedAttended: 0, totalAttended: 0 };
     const gPlatform = globalPlatformCallAgg[0] || { invited: 0, invitedAttended: 0, totalAttended: 0 };
 
-    const totalInvited = (gAtt.invited || 0) + (gBot.invited || 0) + (gPlatform.invited || 0);
-    const totalInvitedAttended = (gAtt.invitedAttended || 0) + (gBot.invitedAttended || 0) + (gPlatform.invitedAttended || 0);
-    // gPlatform.totalAttended qo'shilmaydi: platformdan chaqirilgan va kelgan o'quvchilar
-    // allaqachon Attendance collection orqali gAtt.totalAttended da hisoblanadi
+    // CalledStudent — yagona deduplication manba (unique index: studentId+date).
+    // Barcha chaqiruv yo'llari (Guruhlar, BotIntegration, bot sync) bitta CalledStudent yozuvini yaratadi.
+    // Attendance va CoddyAttendance faqat "hamma kelganlar" (totalAttended) uchun ishlatiladi.
+    const totalInvited = (gPlatform.invited || 0);
+    const totalInvitedAttended = (gPlatform.invitedAttended || 0);
     const totalAttended = (gAtt.totalAttended || 0) + (gBot.totalAttended || 0);
     const mentorCount = workers.filter((w) => ["mentor", "mentor_ta"].includes(w.role)).length;
 
@@ -453,25 +602,59 @@ const getAnalytics = asyncHandler(async (req, res) => {
       attendancePct: totalInvited > 0 ? Math.min(Math.round((totalInvitedAttended / totalInvited) * 100), 100) : 0
     };
 
+    // CalledStudent — chaqirilganlar uchun yagona manba (unique per student per day)
+    // totalAttended faqat Attendance va CoddyAttendance dan (barcha kelganlar)
     const perMentorAttMap = new Map();
-    perMentorAttAgg.forEach((r) => perMentorAttMap.set(r._id, r));
+    perMentorAttAgg.forEach((r) => perMentorAttMap.set(r._id, {
+      invited: 0,
+      invitedAttended: 0,
+      totalAttended: r.totalAttended || 0
+    }));
     perMentorBotAgg.forEach((r) => {
       const existing = perMentorAttMap.get(r._id) || { invited: 0, invitedAttended: 0, totalAttended: 0 };
       perMentorAttMap.set(r._id, {
-        invited: (existing.invited || 0) + (r.invited || 0),
-        invitedAttended: (existing.invitedAttended || 0) + (r.invitedAttended || 0),
+        invited: existing.invited,
+        invitedAttended: existing.invitedAttended,
         totalAttended: (existing.totalAttended || 0) + (r.totalAttended || 0)
       });
     });
     perMentorPlatformCallAgg.forEach((r) => {
       const existing = perMentorAttMap.get(r._id) || { invited: 0, invitedAttended: 0, totalAttended: 0 };
       perMentorAttMap.set(r._id, {
-        invited: (existing.invited || 0) + (r.invited || 0),
-        invitedAttended: (existing.invitedAttended || 0) + (r.invitedAttended || 0),
-        // totalAttended qo'shilmaydi: platform orqali kelganlar Attendance da allaqachon hisoblanadi
+        invited: (r.invited || 0),
+        invitedAttended: (r.invitedAttended || 0),
         totalAttended: existing.totalAttended || 0
       });
     });
+
+    const perMentorDetailMap = new Map();
+    // attendedStudents faqat: Attendance va CoddyAttendance detail (invitedStudents ular dan olinmaydi)
+    const mergeDetailAttendedOnly = (rows = []) => {
+      rows.forEach((row) => {
+        const key = String(row?._id || "");
+        if (!key) return;
+        const existing = perMentorDetailMap.get(key) || { invitedStudents: [], attendedStudents: [] };
+        perMentorDetailMap.set(key, {
+          invitedStudents: existing.invitedStudents || [],
+          attendedStudents: uniqueSortedNames([...(existing.attendedStudents || []), ...(row.attendedStudents || [])])
+        });
+      });
+    };
+    // invitedStudents + attendedStudents: faqat CalledStudent (count bilan mos kelishi uchun, unique index garantiya beradi)
+    const mergeDetailBoth = (rows = []) => {
+      rows.forEach((row) => {
+        const key = String(row?._id || "");
+        if (!key) return;
+        const existing = perMentorDetailMap.get(key) || { invitedStudents: [], attendedStudents: [] };
+        perMentorDetailMap.set(key, {
+          invitedStudents: uniqueSortedNames([...(existing.invitedStudents || []), ...(row.invitedStudents || [])]),
+          attendedStudents: uniqueSortedNames([...(existing.attendedStudents || []), ...(row.attendedStudents || [])])
+        });
+      });
+    };
+    mergeDetailAttendedOnly(perMentorAttDetailAgg);
+    mergeDetailAttendedOnly(perMentorBotDetailAgg);
+    mergeDetailBoth(perMentorPlatformDetailAgg);
 
     const studentsByMentorMap = new Map(studentsByMentorAgg.map((r) => [r._id, r]));
     const mentorOnly = workers.filter((w) => ["mentor", "mentor_ta"].includes(w.role));
@@ -485,11 +668,12 @@ const getAnalytics = asyncHandler(async (req, res) => {
       if (matchedSdKey) usedStudentKeys.add(matchedSdKey);
       const sd = matchedSdKey
         ? studentsByMentorMap.get(matchedSdKey)
-        : { totalStudents: 0, groupList: [], good: 0, average: 0, lead: 0, poor: 0, freeze: 0 };
+        : { totalStudents: 0, groupList: [], good: 0, average: 0, lead: 0, poor: 0, freeze: 0, leadStudents: [], freezeStudents: [] };
 
       const matchedAdKey = findBestUnusedKey(worker.fullName, attendanceKeys, usedAttendanceKeys);
       if (matchedAdKey) usedAttendanceKeys.add(matchedAdKey);
       const ad = matchedAdKey ? perMentorAttMap.get(matchedAdKey) : { invited: 0, invitedAttended: 0, totalAttended: 0 };
+      const adDetails = matchedAdKey ? perMentorDetailMap.get(matchedAdKey) : { invitedStudents: [], attendedStudents: [] };
 
       const total = sd.totalStudents;
       const qualityScore = total > 0
@@ -503,13 +687,17 @@ const getAnalytics = asyncHandler(async (req, res) => {
         groupList: sd.groupList.slice().sort(),
         totalStudents: total,
         invited: ad.invited,
+        invitedStudents: uniqueSortedNames(adDetails?.invitedStudents || []),
         attended: ad.totalAttended,
+        attendedStudents: uniqueSortedNames(adDetails?.attendedStudents || []),
         attendancePct: ad.invited > 0 ? Math.min(Math.round((ad.invitedAttended / ad.invited) * 100), 100) : 0,
         good: sd.good,
         average: sd.average,
         lead: sd.lead,
+        leadStudents: uniqueSortedNames(sd.leadStudents || []),
         poor: sd.poor,
         freeze: sd.freeze,
+        freezeStudents: uniqueSortedNames(sd.freezeStudents || []),
         qualityScore,
       };
     });
@@ -559,14 +747,12 @@ const getAnalytics = asyncHandler(async (req, res) => {
       ])
     );
 
+    // Trend: faqat totalAttended Attendance va CoddyAttendance dan; invited/missed CalledStudent dan
     trendAgg.forEach((r) => {
       const key = trendKeyFromAgg(trendGroup, r._id || {});
       if (trendMap.has(key)) {
         const existing = trendMap.get(key);
-        existing.invited += (r.invited || 0);
-        existing.invitedAttended += (r.invitedAttended || 0);
         existing.totalAttended += (r.totalAttended || 0);
-        existing.missed += (r.missed || 0);
       }
     });
 
@@ -574,10 +760,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
       const key = trendKeyFromAgg(trendGroup, r._id || {});
       if (trendMap.has(key)) {
         const existing = trendMap.get(key);
-        existing.invited += (r.invited || 0);
-        existing.invitedAttended += (r.invitedAttended || 0);
         existing.totalAttended += (r.totalAttended || 0);
-        existing.missed += (r.missed || 0);
       }
     });
 
@@ -587,7 +770,6 @@ const getAnalytics = asyncHandler(async (req, res) => {
         const existing = trendMap.get(key);
         existing.invited += (r.invited || 0);
         existing.invitedAttended += (r.invitedAttended || 0);
-        // totalAttended qo'shilmaydi: platform orqali kelganlar Attendance da allaqachon hisoblanadi
         existing.missed += (r.missed || 0);
       }
     });
@@ -608,7 +790,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
     }, "Analytics data");
   } catch (error) {
     console.error("CRITICAL ERROR IN getAnalytics:", error);
-    return res.status(500).json({ success: false, message: error.message, stack: error.stack });
+    return res.status(500).json({ success: false, message: "Tahlil yuklanishida xatolik yuz berdi" });
   }
 });
 

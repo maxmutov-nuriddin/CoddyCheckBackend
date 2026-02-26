@@ -22,6 +22,11 @@ const searchScene = new WizardScene(
       return ctx.reply("Qidiruv matni kiriting.");
     }
 
+    if (text.length > 50) {
+      await ctx.reply("Qidiruv matni juda uzun. Maksimal 50 belgi kiriting.", Markup.keyboard(adminMainKeyboard).resize());
+      return ctx.scene.leave();
+    }
+
     try {
       const stripped = text.replace(/\s+/g, "");
       const pattern = stripped

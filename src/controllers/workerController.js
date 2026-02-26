@@ -80,7 +80,7 @@ const createWorker = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Bu Telegram ID allaqachon mavjud");
   }
 
-  const tempPassword = `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const tempPassword = require("crypto").randomBytes(12).toString("base64url");
 
   const user = await User.create({
     fullName,

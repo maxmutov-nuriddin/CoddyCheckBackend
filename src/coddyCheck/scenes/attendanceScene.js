@@ -85,6 +85,10 @@ async function selectGroupAndAskStudent(ctx, group) {
   );
 }
 
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function saveAttendance(ctx, { studentName, studentGroup, mainTeacher, topic }) {
   const now = DateTime.now().setZone(env.appTimezone || "Asia/Tashkent");
   const date = now.toFormat("yyyy-MM-dd");
@@ -93,7 +97,7 @@ async function saveAttendance(ctx, { studentName, studentGroup, mainTeacher, top
   try {
     // Only check mark records - call_extra/keep records are NOT counted as added students
     const existingMark = await CoddyAttendance.findOne({
-      studentName: { $regex: new RegExp(`^${studentName}$`, "i") },
+      studentName: { $regex: new RegExp(`^${escapeRegex(studentName)}$`, "i") },
       date,
       requestType: "mark"
     });
@@ -111,7 +115,7 @@ async function saveAttendance(ctx, { studentName, studentGroup, mainTeacher, top
     const todayStart = now.startOf("day").toJSDate();
     const todayEnd = now.endOf("day").toJSDate();
     const pendingCall = await CoddyAttendance.findOne({
-      studentName: { $regex: new RegExp(`^${studentName}$`, "i") },
+      studentName: { $regex: new RegExp(`^${escapeRegex(studentName)}$`, "i") },
       requestType: { $in: ["call_extra", "keep"] },
       status: "Kutilmoqda",
       $or: [{ date }, { createdAt: { $gte: todayStart, $lte: todayEnd } }]
@@ -121,7 +125,7 @@ async function saveAttendance(ctx, { studentName, studentGroup, mainTeacher, top
     let pendingWebCall = null;
     if (!pendingCall) {
       const matchedStudents = await Student.find({
-        fullName: { $regex: new RegExp(`^${studentName}$`, "i") }
+        fullName: { $regex: new RegExp(`^${escapeRegex(studentName)}$`, "i") }
       })
         .populate("groupId", "name")
         .lean();

@@ -878,34 +878,36 @@ const getResults = asyncHandler(async (req, res) => {
     if (isInvited && isMissed) stats.missed = (stats.missed || 0) + 1;
   };
 
+  // attendanceRows: faqat "kelganlar" soniga (isAttended). Chaqirilganlar CalledStudent dan olinadi.
   attendanceRows.forEach(r => {
-    const isInvited = r.callStatus === "chaqirilgan";
     const isAttended = r.attendanceStatus === "keldi";
-    const isMissed = r.attendanceStatus === "kelmadi";
-    processRow(formatYMD(r.date), isInvited, isAttended, isMissed, r.studentId);
+    if (!isAttended) return;
+    const dateStr = formatYMD(r.date);
+    processRow(dateStr, false, isAttended, false, r.studentId, false);
   });
 
+  // botRows: faqat mark yozuvlari "kelganlar" soniga. Chaqirilganlar CalledStudent dan olinadi.
   botRows.forEach(r => {
     const requestType = String(r.requestType || "").toLowerCase();
     const status = String(r.status || "");
-    const isCallRequest = ["call_extra", "keep"].includes(requestType);
-    const isInvited = r.callConfirmed === true && isCallRequest;
-    // Faqat mark yozuvlari "Kelganlar" soniga qo'shiladi (webSync bo'lmaganlari).
     const isAttended = requestType === "mark" && status === "Keldi" && r.webSync !== true;
-    // Chaqirilganlar ichida kelmaganlar call request statusidan olinadi.
-    const isMissed = isInvited && status === "Kelmadi";
-    const isInvitedAttended = isInvited && status === "Keldi";
+    if (!isAttended) return;
+    const dateStr = r.date;
     const studentIdentifier = r.studentId || r.studentName || r.phone;
-    processRow(r.date, isInvited, isAttended, isMissed, studentIdentifier, isInvitedAttended);
+    processRow(dateStr, false, isAttended, false, studentIdentifier, false);
   });
 
+  // platformCallsRaw (CalledStudent): chaqirilganlar uchun YAGONA manba.
+  // unique index {studentId, date} — har bir o'quvchi uchun kuniga bitta yozuv, dedup kerak emas.
   platformCallsRaw.forEach(r => {
-    const isInvited = true;
-    // CalledStudent orqali kelganlar manualAttendance orqali Attendance da ham saqlanadi,
-    // shuning uchun isAttended = false qilib ikki marta hisoblashni oldini olamiz.
-    const isAttended = false;
-    const isMissed = false;
-    processRow(formatYMD(r.date), isInvited, isAttended, isMissed, null);
+    const dateStr = formatYMD(r.date);
+    const studentIdentifier = r.studentId ? String(r.studentId) : null;
+    const lastStatus = String(r.lastStatus || "").toLowerCase();
+    const isInvited = lastStatus === "keldi" || lastStatus === "kelmadi" || lastStatus === "pending";
+    if (!isInvited) return;
+    const isMissed = lastStatus === "kelmadi";
+    const isInvitedAttended = lastStatus === "keldi";
+    processRow(dateStr, isInvited, false, isMissed, studentIdentifier, isInvitedAttended);
   });
 
   const list = Array.from(resultsMap.values()).sort((a, b) => b.period.localeCompare(a.period));
@@ -923,7 +925,7 @@ const getResults = asyncHandler(async (req, res) => {
 const getRecentActivity = asyncHandler(async (req, res) => {
   const { date, status = "Barchasi", search = "", sort = "date-desc" } = req.query;
 
-  const coddyQuery = {};
+  const coddyQuery = { requestType: { $ne: "talk_request" } };
   const attendanceQuery = {};
 
   if (date) {
@@ -933,6 +935,7 @@ const getRecentActivity = asyncHandler(async (req, res) => {
     coddyQuery.$or = [{ date: dayStr }, { callConfirmed: false }];
     attendanceQuery.date = { $gte: start, $lte: end };
   }
+
 
   const [botRows, webRows, staff, kuratorTelegramIdSet] = await Promise.all([
     CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }).lean(),
@@ -1570,7 +1573,21 @@ const getCalledStudents = asyncHandler(async (req, res) => {
 });
 
 const deleteCalledStudent = asyncHandler(async (req, res) => {
+  const record = await CalledStudent.findById(req.params.id).lean();
+  if (!record) return ok(res, null, "Record deleted");
+
   await CalledStudent.findByIdAndDelete(req.params.id);
+
+  // Tegishli Attendance yozuvlarini ham o'chirish (callStudent yaratgan chaqirilgan yozuvlar)
+  if (record.studentId && record.date) {
+    const { start, end } = getDayBounds(record.date);
+    await Attendance.deleteMany({
+      studentId: record.studentId,
+      date: { $gte: start, $lte: end },
+      callStatus: "chaqirilgan"
+    });
+  }
+
   return ok(res, null, "Record deleted");
 });
 

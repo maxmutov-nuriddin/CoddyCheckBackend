@@ -16,19 +16,27 @@ async function sendTelegramMessage({ telegramId, text, replyMarkup }) {
     body.reply_markup = replyMarkup;
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10_000); // 10 soniya
 
-  const json = await response.json();
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
 
-  if (!response.ok || !json.ok) {
-    throw new Error(`Telegram API error: ${JSON.stringify(json)}`);
+    const json = await response.json();
+
+    if (!response.ok || !json.ok) {
+      throw new Error(`Telegram API error: ${JSON.stringify(json)}`);
+    }
+
+    return json;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  return json;
 }
 
 module.exports = {

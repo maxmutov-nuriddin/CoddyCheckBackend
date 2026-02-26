@@ -6,6 +6,10 @@ const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { created, ok } = require("../utils/response");
 
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const getStudents = asyncHandler(async (req, res) => {
   const { groupId, search, isActive, lite } = req.query;
   const liteMode = String(lite || "").toLowerCase();
@@ -14,7 +18,7 @@ const getStudents = asyncHandler(async (req, res) => {
   if (groupId) filter.groupId = groupId;
   if (typeof isActive !== "undefined") filter.isActive = isActive === "true";
   if (search) {
-    filter.fullName = { $regex: search, $options: "i" };
+    filter.fullName = { $regex: escapeRegex(String(search).slice(0, 100)), $options: "i" };
   }
 
   let query = Student.find(filter);

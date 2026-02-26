@@ -180,6 +180,20 @@ const changePassword = asyncHandler(async (req, res) => {
 });
 
 const deleteAccount = asyncHandler(async (req, res) => {
+  const password = String(req.body.password || "").trim();
+  if (!password) {
+    throw new ApiError(400, "Akkauntni o'chirish uchun parolni kiriting");
+  }
+
+  // Parolni tekshirish
+  const user = await User.findById(req.user._id).select("+password");
+  if (!user) throw new ApiError(404, "Foydalanuvchi topilmadi");
+
+  const isValid = await user.comparePassword(password);
+  if (!isValid) {
+    throw new ApiError(401, "Parol noto'g'ri. Akkaunt o'chirilmadi.");
+  }
+
   // Single-curator system: wipe ALL data from every collection
   await Promise.all([
     AttendanceStatusLog.deleteMany({}),
@@ -222,7 +236,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
     { parse_mode: "Markdown" }
   );
 
-  _resetStore = { code, expiresAt };
+  _resetStore = { code, expiresAt, attempts: 0 };
   return ok(res, null, "Kod Telegram botga yuborildi");
 });
 
@@ -240,7 +254,14 @@ const resetPassword = asyncHandler(async (req, res) => {
     _resetStore = null;
     throw new ApiError(400, "Kod muddati tugagan. Qaytadan urinib ko'ring");
   }
-  if (code !== _resetStore.code) throw new ApiError(400, "Kod noto'g'ri");
+  if (_resetStore.attempts >= 5) {
+    _resetStore = null;
+    throw new ApiError(400, "Juda ko'p noto'g'ri urinish. Qaytadan kod so'rang.");
+  }
+  if (code !== _resetStore.code) {
+    _resetStore.attempts += 1;
+    throw new ApiError(400, "Kod noto'g'ri");
+  }
 
   const kurator = await User.findOne({ role: "kurator", isActive: true }).select("+password");
   if (!kurator) throw new ApiError(404, "Kurator topilmadi");

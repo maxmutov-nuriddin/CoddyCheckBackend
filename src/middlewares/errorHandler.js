@@ -1,4 +1,4 @@
-﻿function notFoundHandler(req, res) {
+function notFoundHandler(req, res) {
   return res.status(404).json({
     success: false,
     message: `Route not found: ${req.originalUrl}`
@@ -16,8 +16,9 @@ function errorHandler(err, _req, res, _next) {
     payload.details = err.details;
   }
 
-  if (process.env.NODE_ENV !== "production" && err.stack) {
-    payload.stack = err.stack;
+  // Stack trace faqat server logiga yoziladi, clientga YUBORILMAYDI
+  if (err.stack) {
+    console.error("[ErrorHandler]", err.stack);
   }
 
   return res.status(statusCode).json(payload);
