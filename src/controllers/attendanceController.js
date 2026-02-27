@@ -851,6 +851,10 @@ const getResults = asyncHandler(async (req, res) => {
   const resultsMap = new Map();
   const uniqueArrivedStudents = new Set();
   const uniqueCameByGroup = new Map();
+  const invitedByDateStudent = new Set();
+  const invitedCameByDateStudent = new Set();
+  const invitedMissedByDateStudent = new Set();
+  const attendedByDateStudent = new Set();
 
   const processRow = (dateStr, isInvited, isAttended, isMissed, studentId = null, isInvitedAttended = false) => {
     let groupKey = dateStr;
@@ -867,27 +871,47 @@ const getResults = asyncHandler(async (req, res) => {
       resultsMap.set(groupKey, { period: groupKey, total: 0, came: 0, uniqueCame: 0, invitedCame: 0, missed: 0 });
     }
     const stats = resultsMap.get(groupKey);
+    const studentKey = studentId ? String(studentId).trim() : "";
+    const dayStudentKey = studentKey ? `${dateStr}|${studentKey}` : "";
+    const shouldDedupByStudent = Boolean(dayStudentKey);
 
-    if (isInvited) stats.total = (stats.total || 0) + 1;
+    if (isInvited) {
+      if (!shouldDedupByStudent || !invitedByDateStudent.has(dayStudentKey)) {
+        stats.total = (stats.total || 0) + 1;
+        if (shouldDedupByStudent) invitedByDateStudent.add(dayStudentKey);
+      }
+    }
     if (isAttended) {
-      stats.came = (stats.came || 0) + 1;
-      const studentKey = studentId ? String(studentId).trim() : "";
-      if (studentKey) {
-        if (!uniqueCameByGroup.has(groupKey)) {
-          uniqueCameByGroup.set(groupKey, new Set());
+      const isNewAttendedRow = !shouldDedupByStudent || !attendedByDateStudent.has(dayStudentKey);
+      if (isNewAttendedRow) {
+        stats.came = (stats.came || 0) + 1;
+        if (shouldDedupByStudent) attendedByDateStudent.add(dayStudentKey);
+
+        if (studentKey) {
+          if (!uniqueCameByGroup.has(groupKey)) {
+            uniqueCameByGroup.set(groupKey, new Set());
+          }
+          const cameSet = uniqueCameByGroup.get(groupKey);
+          cameSet.add(studentKey);
+          stats.uniqueCame = cameSet.size;
+          uniqueArrivedStudents.add(studentKey);
+        } else {
+          stats.uniqueCame = Math.max(Number(stats.uniqueCame || 0), Number(stats.came || 0));
         }
-        const cameSet = uniqueCameByGroup.get(groupKey);
-        cameSet.add(studentKey);
-        stats.uniqueCame = cameSet.size;
-        uniqueArrivedStudents.add(studentKey);
-      } else {
-        stats.uniqueCame = Math.max(Number(stats.uniqueCame || 0), Number(stats.came || 0));
       }
     }
     if (isInvitedAttended || (isInvited && isAttended)) {
-      stats.invitedCame = (stats.invitedCame || 0) + 1;
+      if (!shouldDedupByStudent || !invitedCameByDateStudent.has(dayStudentKey)) {
+        stats.invitedCame = (stats.invitedCame || 0) + 1;
+        if (shouldDedupByStudent) invitedCameByDateStudent.add(dayStudentKey);
+      }
     }
-    if (isInvited && isMissed) stats.missed = (stats.missed || 0) + 1;
+    if (isInvited && isMissed) {
+      if (!shouldDedupByStudent || !invitedMissedByDateStudent.has(dayStudentKey)) {
+        stats.missed = (stats.missed || 0) + 1;
+        if (shouldDedupByStudent) invitedMissedByDateStudent.add(dayStudentKey);
+      }
+    }
   };
 
   // attendanceRows: faqat "kelganlar" soniga (isAttended). Chaqirilganlar CalledStudent dan olinadi.
