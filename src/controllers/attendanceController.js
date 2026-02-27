@@ -850,6 +850,7 @@ const getResults = asyncHandler(async (req, res) => {
 
   const resultsMap = new Map();
   const uniqueArrivedStudents = new Set();
+  const uniqueCameByGroup = new Map();
 
   const processRow = (dateStr, isInvited, isAttended, isMissed, studentId = null, isInvitedAttended = false) => {
     let groupKey = dateStr;
@@ -863,14 +864,25 @@ const getResults = asyncHandler(async (req, res) => {
     }
 
     if (!resultsMap.has(groupKey)) {
-      resultsMap.set(groupKey, { period: groupKey, total: 0, came: 0, invitedCame: 0, missed: 0 });
+      resultsMap.set(groupKey, { period: groupKey, total: 0, came: 0, uniqueCame: 0, invitedCame: 0, missed: 0 });
     }
     const stats = resultsMap.get(groupKey);
 
     if (isInvited) stats.total = (stats.total || 0) + 1;
     if (isAttended) {
       stats.came = (stats.came || 0) + 1;
-      if (studentId) uniqueArrivedStudents.add(String(studentId));
+      const studentKey = studentId ? String(studentId).trim() : "";
+      if (studentKey) {
+        if (!uniqueCameByGroup.has(groupKey)) {
+          uniqueCameByGroup.set(groupKey, new Set());
+        }
+        const cameSet = uniqueCameByGroup.get(groupKey);
+        cameSet.add(studentKey);
+        stats.uniqueCame = cameSet.size;
+        uniqueArrivedStudents.add(studentKey);
+      } else {
+        stats.uniqueCame = Math.max(Number(stats.uniqueCame || 0), Number(stats.came || 0));
+      }
     }
     if (isInvitedAttended || (isInvited && isAttended)) {
       stats.invitedCame = (stats.invitedCame || 0) + 1;
