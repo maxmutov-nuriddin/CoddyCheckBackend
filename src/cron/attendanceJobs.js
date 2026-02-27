@@ -142,30 +142,7 @@ async function sendMorningTodayExpectedDigest() {
     return { totalEntries: 0, taNotified: 0, mentorNotified: 0 };
   }
 
-  const taUsers = await User.find({
-    role: { $in: ["ta", "mentor_ta"] },
-    isActive: true,
-    telegramId: { $nin: [null, ""] }
-  })
-    .select("telegramId")
-    .lean();
-
-  const taText = [
-    `📌 <b>Bugungi ro'yxat (${escapeHtml(dateStr)})</b>`,
-    "Quyidagi o'quvchilar bugun kelishi kerak:",
-    "",
-    buildPlannedLines(plannedEntries)
-  ].join("\n");
-
   let taNotified = 0;
-  for (const user of taUsers) {
-    try {
-      await sendTelegramMessage({ telegramId: user.telegramId, text: taText });
-      taNotified += 1;
-    } catch (error) {
-      console.error(`Failed to send 09:00 TA digest to ${user.telegramId}:`, error.message);
-    }
-  }
 
   const mentorMap = new Map();
   for (const entry of plannedEntries) {
@@ -523,13 +500,14 @@ function startAttendanceJobs() {
       await sendPendingRequestReminderToKurators();
       const digestResult = await sendMorningTodayExpectedDigest();
       console.log("09:00 expected today digest:", digestResult);
+      await sendMorningGreetings();
     },
     { timezone: env.appTimezone }
   );
 
-  // 09:00, 12:00, 15:00, 20:00 — role bo'yicha eslatmalar
+  // 12:00, 15:00, 20:00 — role bo'yicha eslatmalar
   cron.schedule(
-    "0 9,12,15,20 * * *",
+    "0 12,15,20 * * *",
     async () => {
       await sendMorningGreetings();
     },
