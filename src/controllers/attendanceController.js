@@ -15,6 +15,8 @@ const env = require("../config/env");
 const { loadActiveStaffForMatching, resolveMentorNameFromWorkers } = require("../coddyCheck/utils/mentorNameResolver");
 const { getBotInstance } = require("../coddyCheck/bot");
 
+const FROZEN_STATUSES = ["frozen", "muzlatilgan", "qarzdor", "qaytadi"];
+
 function toComparableTelegramIds(value) {
   const raw = String(value ?? "").trim();
   if (!raw) return [];
@@ -271,6 +273,20 @@ function mapStatusLabelToCalledStatus(value) {
   if (normalized === "kelmadi") return "kelmadi";
   if (normalized === "kutilmoqda" || normalized === "pending") return "pending";
   return null;
+}
+
+function getTodayYmdInTimezone(timeZone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timeZone || "Asia/Tashkent",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+
+  const year = parts.find((p) => p.type === "year")?.value || "0000";
+  const month = parts.find((p) => p.type === "month")?.value || "01";
+  const day = parts.find((p) => p.type === "day")?.value || "01";
+  return `${year}-${month}-${day}`;
 }
 
 async function syncBotCallActivityToCalledStudent(botRow, changes = {}) {
@@ -834,16 +850,42 @@ const getResults = asyncHandler(async (req, res) => {
     date: { $gte: formatYMD(start), $lte: formatYMD(end) }
   };
 
-  const [attendanceRowsRaw, botRowsRaw, platformCallsRaw, staff, kuratorTelegramIdSet, totalActiveStudents] = await Promise.all([
+  const [attendanceRowsRaw, botRowsRaw, staff, kuratorTelegramIdSet, totalActiveStudents] = await Promise.all([
     Attendance.find(filter).lean(),
     CoddyAttendance.find(botMatch).lean(),
-    CalledStudent.find(filter).lean(),
     loadActiveStaffForMatching(),
     loadKuratorTelegramIdSet(),
-    Student.countDocuments({ isActive: true })
+    Student.countDocuments({ isActive: true, frozenStatus: { $nin: FROZEN_STATUSES } })
   ]);
 
+  const botDatesForReconcile = Array.from(
+    new Set(
+      botRowsRaw
+        .filter((row) => {
+          const requestType = String(row?.requestType || "").toLowerCase();
+          if (!["call_extra", "keep"].includes(requestType)) return false;
+          if (!row?.date) return false;
+          const status = String(row?.status || "");
+          return Boolean(row?.callConfirmed) || status === "Keldi" || status === "Kelmadi";
+        })
+        .map((row) => String(row.date))
+    )
+  );
+
+  if (botDatesForReconcile.length > 0) {
+    await Promise.all(
+      botDatesForReconcile.map((dateStr) =>
+        reconcileBotCallsToCalledStudentsByDate(dateStr).catch((error) => {
+          console.error(`Failed to reconcile bot calls for ${dateStr}:`, error.message);
+        })
+      )
+    );
+  }
+
+  const platformCallsRaw = await CalledStudent.find(filter).lean();
+
   const roleByTelegramId = buildRoleByTelegramIdMap(staff);
+  const todayYmd = getTodayYmdInTimezone(env.appTimezone);
 
   const attendanceRows = attendanceRowsRaw.filter((row) => !isKuratorWebRow(row));
   const botRows = botRowsRaw.filter((row) => !isKuratorBotRow(row, roleByTelegramId, kuratorTelegramIdSet));
@@ -941,7 +983,8 @@ const getResults = asyncHandler(async (req, res) => {
     const lastStatus = String(r.lastStatus || "").toLowerCase();
     const isInvited = lastStatus === "keldi" || lastStatus === "kelmadi" || lastStatus === "pending";
     if (!isInvited) return;
-    const isMissed = lastStatus === "kelmadi";
+    const isHistoricalPending = lastStatus === "pending" && dateStr < todayYmd;
+    const isMissed = lastStatus === "kelmadi" || isHistoricalPending;
     const isInvitedAttended = lastStatus === "keldi";
     processRow(dateStr, isInvited, false, isMissed, studentIdentifier, isInvitedAttended);
   });
