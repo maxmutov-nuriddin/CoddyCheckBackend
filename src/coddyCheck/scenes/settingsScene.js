@@ -43,6 +43,68 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+const TA_STATS_PERIOD_KEYBOARD = Markup.inlineKeyboard([
+  [
+    Markup.button.callback("📅 Bugunlik", "coddy_ta_stats_daily"),
+    Markup.button.callback("📆 Haftalik", "coddy_ta_stats_weekly"),
+  ],
+  [
+    Markup.button.callback("🗓 Oylik", "coddy_ta_stats_monthly"),
+    Markup.button.callback("📊 Jami", "coddy_ta_stats_all"),
+  ]
+]);
+
+async function buildTaStatsText(teacherId, period) {
+  const now = DateTime.now().setZone("Asia/Tashkent");
+
+  let matchQuery = { requestType: "mark" };
+  let periodLabel;
+
+  if (period === "daily") {
+    const today = now.toFormat("yyyy-MM-dd");
+    matchQuery.date = today;
+    periodLabel = `Bugunlik — ${now.toFormat("dd.MM.yyyy")}`;
+  } else if (period === "weekly") {
+    const weekStart = now.startOf("week");
+    const weekEnd = now.endOf("week");
+    matchQuery.date = { $gte: weekStart.toFormat("yyyy-MM-dd"), $lte: weekEnd.toFormat("yyyy-MM-dd") };
+    periodLabel = `Haftalik — ${weekStart.toFormat("dd.MM")}–${weekEnd.toFormat("dd.MM.yyyy")}`;
+  } else if (period === "monthly") {
+    const monthStart = now.startOf("month");
+    const monthEnd = now.endOf("month");
+    matchQuery.date = { $gte: monthStart.toFormat("yyyy-MM-dd"), $lte: monthEnd.toFormat("yyyy-MM-dd") };
+    periodLabel = `Oylik — ${monthStart.toFormat("dd.MM")}–${monthEnd.toFormat("dd.MM.yyyy")}`;
+  } else {
+    periodLabel = "Jami — barcha vaqt";
+  }
+
+  const [stats, myRecord] = await Promise.all([
+    CoddyAttendance.aggregate([
+      { $match: matchQuery },
+      { $group: { _id: "$teacherName", count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ]),
+    CoddyAttendance.findOne({ teacherId }).lean()
+  ]);
+
+  const myName = myRecord?.teacherName?.toLowerCase();
+
+  if (!stats.length) {
+    return `<b>TA statistikasi — ${periodLabel}:</b>\n\nHali statistika yo'q.`;
+  }
+
+  const lines = [`<b>TA statistikasi — ${periodLabel}:</b>\n`];
+  stats.forEach((s, i) => {
+    const rawName = s?._id || "Noma'lum";
+    const safeName = escapeHtml(rawName);
+    const isMe = myName && String(rawName).toLowerCase() === myName;
+    const marker = isMe ? " <b>← Siz</b>" : "";
+    lines.push(`${i + 1}. ${safeName} — <b>${s.count}</b> ta${marker}`);
+  });
+
+  return lines.join("\n");
+}
+
 function getSettingsKeyboard(role) {
   if (role === "mentor_ta") return MENTOR_TA_SETTINGS_KEYBOARD;
   if (role === "ta") return TA_SETTINGS_KEYBOARD;
@@ -93,33 +155,10 @@ async function showMyMarks(ctx) {
 }
 
 async function showTaStats(ctx) {
-  const stats = await CoddyAttendance.aggregate([
-    { $match: { requestType: "mark" } },
-    { $group: { _id: "$teacherName", count: { $sum: 1 } } },
-    { $sort: { count: -1 } }
-  ]);
-
-  if (!stats.length) {
-    await ctx.reply("Hali statistika yo'q.", getSettingsKeyboard(String(ctx.state?.worker?.role || "").toLowerCase()));
-    return;
-  }
-
-  const myRecord = await CoddyAttendance.findOne({ teacherId: ctx.from.id }).lean();
-  const myName = myRecord?.teacherName?.toLowerCase();
-  const lines = ["<b>TA statistikasi - jami qo'shilgan o'quvchilar:</b>\n"];
-
-  stats.forEach((s, i) => {
-    const prefix = `${i + 1}.`;
-    const rawName = s?._id || "Noma'lum";
-    const safeName = escapeHtml(rawName);
-    const isMe = myName && String(rawName).toLowerCase() === myName;
-    const marker = isMe ? " <b>← Siz</b>" : "";
-    lines.push(`${prefix} ${safeName} - <b>${s.count}</b> ta${marker}`);
-  });
-
-  await ctx.reply(lines.join("\n"), {
+  const text = await buildTaStatsText(ctx.from.id, "daily");
+  await ctx.reply(text, {
     parse_mode: "HTML",
-    reply_markup: getSettingsKeyboard(String(ctx.state?.worker?.role || "").toLowerCase()).reply_markup
+    reply_markup: TA_STATS_PERIOD_KEYBOARD.reply_markup
   });
 }
 
@@ -303,5 +342,24 @@ const settingsScene = new WizardScene(
 settingsScene.action(/^coddy_delete_call_(.+)$/, teacherController.deleteCallRecord);
 settingsScene.action(/^coddy_confirm_del_call_(.+)$/, teacherController.confirmDeleteCallRecord);
 settingsScene.action(/^coddy_cancel_del_call_(.+)$/, teacherController.cancelDeleteCallRecord);
+
+// TA statistikasi davr tugmalari
+settingsScene.action(/^coddy_ta_stats_(daily|weekly|monthly|all)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const periodKey = ctx.match[1];
+  const period = periodKey === "all" ? null : periodKey;
+  try {
+    const text = await buildTaStatsText(ctx.from.id, period);
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      reply_markup: TA_STATS_PERIOD_KEYBOARD.reply_markup
+    });
+  } catch (err) {
+    // message_not_modified yoki boshqa Telegram xatosi — yangi xabar yuborish
+    if (!err.message?.includes("message is not modified")) {
+      console.error("ta_stats edit error:", err);
+    }
+  }
+});
 
 module.exports = settingsScene;

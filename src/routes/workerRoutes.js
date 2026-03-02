@@ -5,7 +5,8 @@ const {
   listWorkers,
   createWorker,
   updateWorker,
-  deleteWorker
+  deleteWorker,
+  notifyWorker
 } = require("../controllers/workerController");
 
 const router = express.Router();
@@ -17,5 +18,6 @@ router.get("/", listWorkers);
 router.post("/", createWorker);
 router.patch("/:id", updateWorker);
 router.delete("/:id", deleteWorker);
+router.post("/:id/notify", notifyWorker);
 
 module.exports = router;

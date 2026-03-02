@@ -1,7 +1,10 @@
 ﻿const User = require("../models/User");
+const CoddyTeacher = require("../coddyCheck/models/CoddyTeacher");
+const CoddyAttendance = require("../coddyCheck/models/CoddyAttendance");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { created, ok } = require("../utils/response");
+const env = require("../config/env");
 
 const STAFF_ROLES = ["mentor", "ta", "mentor_ta"];
 const DEFAULT_WORKER_COLOR = "#3B82F6";
@@ -47,6 +50,20 @@ function toWorkerDto(user) {
   };
 }
 
+// "none" — hech qachon /start bosmagan
+// "low"  — start bosgan, lekin so'nggi 30 kunda faoliyat yo'q
+// "medium" — 1–9 ta yozuv (so'nggi 30 kun)
+// "high"  — 10+ ta yozuv (so'nggi 30 kun)
+function calcBotStatus(telegramId, startedSet, activityMap) {
+  const num = Number(telegramId);
+  if (!num || !Number.isFinite(num)) return "none";
+  if (!startedSet.has(num)) return "none";
+  const count = activityMap[num] || 0;
+  if (count === 0) return "low";
+  if (count < 10) return "medium";
+  return "high";
+}
+
 const listWorkers = asyncHandler(async (req, res) => {
   const q = normalizeText(req.query.q || "").toLowerCase();
 
@@ -62,7 +79,35 @@ const listWorkers = asyncHandler(async (req, res) => {
       })
     : users;
 
-  return ok(res, filtered.map(toWorkerDto), "Workers list");
+  // Bot faoliyatini hisoblash
+  const tgIds = filtered
+    .map((u) => Number(u.telegramId))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
+  let startedSet = new Set();
+  let activityMap = {};
+
+  if (tgIds.length) {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const [started, counts] = await Promise.all([
+      CoddyTeacher.find({ telegramId: { $in: tgIds } }).select("telegramId").lean(),
+      CoddyAttendance.aggregate([
+        { $match: { teacherId: { $in: tgIds }, createdAt: { $gte: thirtyDaysAgo } } },
+        { $group: { _id: "$teacherId", count: { $sum: 1 } } }
+      ])
+    ]);
+    startedSet = new Set(started.map((d) => d.telegramId));
+    counts.forEach((r) => { activityMap[r._id] = r.count; });
+  }
+
+  return ok(
+    res,
+    filtered.map((u) => ({
+      ...toWorkerDto(u),
+      botStatus: calcBotStatus(u.telegramId, startedSet, activityMap)
+    })),
+    "Workers list"
+  );
 });
 
 const createWorker = asyncHandler(async (req, res) => {
@@ -141,9 +186,43 @@ const deleteWorker = asyncHandler(async (req, res) => {
   return ok(res, null, "Ishchi o'chirildi");
 });
 
+const notifyWorker = asyncHandler(async (req, res) => {
+  const worker = await User.findById(req.params.id);
+  if (!worker || worker.role === "kurator") {
+    throw new ApiError(404, "Ishchi topilmadi");
+  }
+
+  if (!worker.telegramId) {
+    throw new ApiError(400, "Bu ishchining Telegram ID si yo'q");
+  }
+
+  const token = env.coddyBotToken;
+  if (!token) {
+    throw new ApiError(503, "Bot token sozlanmagan");
+  }
+
+  const text = `Hurmatli ${worker.fullName}, iltimos boshaganizda kurator bilan uchrashib keting.`;
+  const url = `${env.telegramApiBase}/bot${token}/sendMessage`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: worker.telegramId, text })
+  });
+
+  const json = await response.json();
+  if (!response.ok || !json.ok) {
+    const desc = json.description || "Noma'lum xato";
+    throw new ApiError(502, `Telegram xato: ${desc}`);
+  }
+
+  return ok(res, { fullName: worker.fullName }, "Xabar yuborildi");
+});
+
 module.exports = {
   listWorkers,
   createWorker,
   updateWorker,
-  deleteWorker
+  deleteWorker,
+  notifyWorker
 };
