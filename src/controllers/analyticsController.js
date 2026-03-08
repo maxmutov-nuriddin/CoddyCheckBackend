@@ -260,10 +260,10 @@ const getAnalytics = asyncHandler(async (req, res) => {
         .select("_id fullName role")
         .lean(),
 
-      Student.countDocuments({ isActive: true }),
+      Student.countDocuments({ isActive: true, groupId: { $exists: true, $ne: null } }),
 
       Student.aggregate([
-        { $match: { isActive: true } },
+        { $match: { isActive: true, groupId: { $exists: true, $ne: null } } },
         {
           $group: {
             _id: null,
@@ -375,7 +375,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
       ]),
 
       Student.aggregate([
-        { $match: { isActive: true } },
+        { $match: { isActive: true, groupId: { $exists: true, $ne: null } } },
         { $lookup: { from: "groups", localField: "groupId", foreignField: "_id", as: "grp" } },
         { $unwind: { path: "$grp", preserveNullAndEmptyArrays: true } },
         {

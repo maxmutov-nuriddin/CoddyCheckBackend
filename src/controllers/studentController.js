@@ -15,7 +15,11 @@ const getStudents = asyncHandler(async (req, res) => {
   const liteMode = String(lite || "").toLowerCase();
 
   const filter = {};
-  if (groupId) filter.groupId = groupId;
+  if (groupId === "none") {
+    filter.$or = [{ groupId: null }, { groupId: { $exists: false } }];
+  } else if (groupId) {
+    filter.groupId = groupId;
+  }
   if (typeof isActive !== "undefined") filter.isActive = isActive === "true";
   if (search) {
     filter.fullName = { $regex: escapeRegex(String(search).slice(0, 100)), $options: "i" };
@@ -77,7 +81,9 @@ const updateStudent = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Student not found");
   }
 
-  if (groupId) {
+  if (groupId === null || groupId === "none" || groupId === "") {
+    student.groupId = null;
+  } else if (groupId) {
     const group = await Group.findById(groupId);
     if (!group) {
       throw new ApiError(404, "Group not found");
