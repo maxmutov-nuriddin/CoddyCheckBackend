@@ -260,10 +260,12 @@ const getAnalytics = asyncHandler(async (req, res) => {
         .select("_id fullName role")
         .lean(),
 
-      Student.countDocuments({ isActive: true, groupId: { $exists: true, $ne: null } }),
+      // Global active count must include groupless students too.
+      Student.countDocuments({ isActive: true }),
 
       Student.aggregate([
-        { $match: { isActive: true, groupId: { $exists: true, $ne: null } } },
+        // Global status cards should reflect all active students, including groupless.
+        { $match: { isActive: true } },
         {
           $group: {
             _id: null,
