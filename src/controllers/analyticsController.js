@@ -10,6 +10,7 @@ const { formatYMD } = require("../utils/date");
 const STAFF_ROLES = ["mentor", "ta", "mentor_ta"];
 const FREEZE_STATUSES = ["frozen", "muzlatilgan", "qarzdor", "qaytadi"];
 const MONTH_UZ = ["Yan", "Fev", "Mar", "Apr", "May", "Iyn", "Iyl", "Avg", "Sen", "Okt", "Noy", "Dek"];
+const HAS_GROUP_EXPR = { $ne: [{ $ifNull: ["$groupId", null] }, null] };
 
 function startOfDay(input) {
   const d = new Date(input);
@@ -264,15 +265,47 @@ const getAnalytics = asyncHandler(async (req, res) => {
       Student.countDocuments({ isActive: true }),
 
       Student.aggregate([
-        // Global status cards should reflect all active students, including groupless.
+        // "All students" keeps groupless rows, but status cards exclude non-frozen groupless students.
         { $match: { isActive: true } },
         {
           $group: {
             _id: null,
-            good: { $sum: { $cond: [{ $eq: ["$frozenStatus", "good"] }, 1, 0] } },
-            average: { $sum: { $cond: [{ $eq: ["$frozenStatus", "average"] }, 1, 0] } },
-            lead: { $sum: { $cond: [{ $eq: ["$frozenStatus", "lead"] }, 1, 0] } },
-            poor: { $sum: { $cond: [{ $eq: ["$frozenStatus", "poor"] }, 1, 0] } },
+            good: {
+              $sum: {
+                $cond: [
+                  { $and: [{ $eq: ["$frozenStatus", "good"] }, HAS_GROUP_EXPR] },
+                  1,
+                  0
+                ]
+              }
+            },
+            average: {
+              $sum: {
+                $cond: [
+                  { $and: [{ $eq: ["$frozenStatus", "average"] }, HAS_GROUP_EXPR] },
+                  1,
+                  0
+                ]
+              }
+            },
+            lead: {
+              $sum: {
+                $cond: [
+                  { $and: [{ $eq: ["$frozenStatus", "lead"] }, HAS_GROUP_EXPR] },
+                  1,
+                  0
+                ]
+              }
+            },
+            poor: {
+              $sum: {
+                $cond: [
+                  { $and: [{ $eq: ["$frozenStatus", "poor"] }, HAS_GROUP_EXPR] },
+                  1,
+                  0
+                ]
+              }
+            },
             freeze: { $sum: { $cond: [{ $in: ["$frozenStatus", FREEZE_STATUSES] }, 1, 0] } },
           }
         }
