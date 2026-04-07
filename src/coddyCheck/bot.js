@@ -27,12 +27,24 @@ async function findBotUserByTelegramId(telegramId) {
   });
 }
 
+async function findSupportByTelegramId(telegramId) {
+  const normalized = String(telegramId || "").trim();
+  if (!normalized) return null;
+  return User.findOne({ telegramId: normalized, isActive: true, role: "support" }).lean();
+}
+
 async function userAllowed(ctx) {
   const telegramId = Number(ctx.from?.id);
   if (!telegramId) return { allowed: false, worker: null };
 
-  // DB-based: check registered users first (curator, mentor, ta, mentor_ta)
-  const user = await findBotUserByTelegramId(telegramId);
+  // Support users: allowed for callback actions only
+  const support = await findSupportByTelegramId(String(telegramId));
+  if (support) {
+    return { allowed: true, worker: support };
+  }
+
+  // DB-based: check registered users (kurator, mentor, ta, mentor_ta)
+  const user = await findBotUserByTelegramId(String(telegramId));
   if (user) {
     return { allowed: true, worker: user };
   }
@@ -253,6 +265,88 @@ async function startCoddyCheckBot() {
   coddyBot.action(/^coddy_delete_call_(.+)$/, teacherController.deleteCallRecord);
   coddyBot.action(/^coddy_confirm_del_call_(.+)$/, teacherController.confirmDeleteCallRecord);
   coddyBot.action(/^coddy_cancel_del_call_(.+)$/, teacherController.cancelDeleteCallRecord);
+
+  // ── Support: approve / reject kurator registration ─────────────────────────
+  coddyBot.action(/^sup_approve_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const kuratorId = ctx.match[1];
+
+    // Only support can use this button
+    const support = await findSupportByTelegramId(String(ctx.from.id));
+    if (!support) {
+      return ctx.answerCbQuery("Sizda bu amalni bajarish huquqi yo'q", { show_alert: true });
+    }
+
+    try {
+      const kurator = await User.findOne({ _id: kuratorId, role: "kurator", registrationStatus: "pending" });
+      if (!kurator) {
+        return ctx.editMessageText("⚠️ Bu so'rov allaqachon ko'rib chiqilgan yoki topilmadi.", { parse_mode: "Markdown" });
+      }
+
+      kurator.registrationStatus = "approved";
+      kurator.isActive = true;
+      await kurator.save();
+
+      // Notify kurator
+      if (kurator.telegramId) {
+        try {
+          await coddyBot.telegram.sendMessage(
+            Number(kurator.telegramId),
+            [`✅ *Tabriklaymiz, ${kurator.fullName}!*`, ``, `Kurator so'rovingiz *qabul qilindi*.`, `Endi CoddyCheck tizimiga kirishingiz mumkin.`].join("\n"),
+            { parse_mode: "Markdown" }
+          );
+        } catch (_) {}
+      }
+
+      await ctx.editMessageText(
+        [`✅ *Qabul qilindi*`, ``, `👤 ${kurator.fullName}`, `📱 ${kurator.phone}`, ``, `Kuratorga xabar yuborildi.`].join("\n"),
+        { parse_mode: "Markdown" }
+      );
+    } catch (err) {
+      console.error("[bot] sup_approve error:", err.message);
+      await ctx.reply("Xatolik yuz berdi: " + err.message);
+    }
+  });
+
+  coddyBot.action(/^sup_reject_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const kuratorId = ctx.match[1];
+
+    // Only support can use this button
+    const support = await findSupportByTelegramId(String(ctx.from.id));
+    if (!support) {
+      return ctx.answerCbQuery("Sizda bu amalni bajarish huquqi yo'q", { show_alert: true });
+    }
+
+    try {
+      const kurator = await User.findOne({ _id: kuratorId, role: "kurator", registrationStatus: "pending" });
+      if (!kurator) {
+        return ctx.editMessageText("⚠️ Bu so'rov allaqachon ko'rib chiqilgan yoki topilmadi.", { parse_mode: "Markdown" });
+      }
+
+      const { telegramId, fullName, phone } = kurator;
+      await User.findByIdAndDelete(kuratorId);
+
+      // Notify kurator
+      if (telegramId) {
+        try {
+          await coddyBot.telegram.sendMessage(
+            Number(telegramId),
+            [`❌ *${fullName}, so'rovingiz rad etildi.*`, ``, `Kurator ro'yxatdan o'tish so'rovingiz qabul qilinmadi.`, `Qo'shimcha ma'lumot uchun support bilan bog'laning.`].join("\n"),
+            { parse_mode: "Markdown" }
+          );
+        } catch (_) {}
+      }
+
+      await ctx.editMessageText(
+        [`❌ *Rad etildi*`, ``, `👤 ${fullName}`, `📱 ${phone}`, ``, `Kurator o'chirildi, xabar yuborildi.`].join("\n"),
+        { parse_mode: "Markdown" }
+      );
+    } catch (err) {
+      console.error("[bot] sup_reject error:", err.message);
+      await ctx.reply("Xatolik yuz berdi: " + err.message);
+    }
+  });
 
   startCoddyDailyReport(coddyBot);
 

@@ -60,7 +60,7 @@ const register = asyncHandler(async (req, res) => {
     isActive: false,
   });
 
-  // Notify support via Telegram
+  // Notify support via Telegram with inline approve/reject buttons
   try {
     const support = await User.findOne({ role: "support", isActive: true }).lean();
     if (support?.telegramId) {
@@ -70,13 +70,19 @@ const register = asyncHandler(async (req, res) => {
         const msg = [
           `📋 *Yangi kurator so'rovi!*`,
           ``,
-          `👤 Ism: ${fullName}`,
+          `👤 Ism: *${fullName}*`,
           `📱 Telefon: ${phone}`,
           `🆔 Telegram ID: ${telegramId || "kiritilmagan"}`,
-          ``,
-          `👉 CoddyCheck support paneliga o'tib so'rovni ko'rib chiqing.`
         ].join("\n");
-        await bot.telegram.sendMessage(Number(support.telegramId), msg, { parse_mode: "Markdown" });
+        await bot.telegram.sendMessage(Number(support.telegramId), msg, {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "✅ Qabul qilish", callback_data: `sup_approve_${user._id}` },
+              { text: "❌ Rad etish", callback_data: `sup_reject_${user._id}` },
+            ]]
+          }
+        });
       }
     }
   } catch (notifyErr) {
