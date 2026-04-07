@@ -184,8 +184,9 @@ const getAnalytics = asyncHandler(async (req, res) => {
     const { dateFrom, dateTo } = req.query;
     const rawTrendGroup = String(req.query.trendGroup || "month").toLowerCase();
     const trendGroup = ["day", "week", "month"].includes(rawTrendGroup) ? rawTrendGroup : "month";
+    const kuratorId = req.user._id;
 
-    const attMatch = {};
+    const attMatch = { kuratorId };
     const botMatch = {};
     let parsedStart = null;
     let parsedEnd = null;
@@ -232,9 +233,10 @@ const getAnalytics = asyncHandler(async (req, res) => {
     };
     const trendAttMatch = {
       ...attNonKuratorMatch,
-      date: { $gte: trendStart, $lte: trendEnd }
+      date: { $gte: trendStart, $lte: trendEnd },
+      kuratorId
     };
-    const trendPlatformMatch = { date: { $gte: trendStart, $lte: trendEnd } };
+    const trendPlatformMatch = { date: { $gte: trendStart, $lte: trendEnd }, kuratorId };
     const trendGroupId = buildTrendGroupId(trendGroup, "$date");
     const trendSort = buildTrendSort(trendGroup);
 
@@ -257,16 +259,16 @@ const getAnalytics = asyncHandler(async (req, res) => {
       trendBotAgg,
       trendPlatformCallAgg
     ] = await Promise.all([
-      User.find({ role: { $in: STAFF_ROLES }, isActive: true })
+      User.find({ role: { $in: STAFF_ROLES }, isActive: true, kuratorId })
         .select("_id fullName role")
         .lean(),
 
       // Global active count must include groupless students too.
-      Student.countDocuments({ isActive: true }),
+      Student.countDocuments({ isActive: true, kuratorId }),
 
       Student.aggregate([
         // "All students" keeps groupless rows, but status cards exclude non-frozen groupless students.
-        { $match: { isActive: true } },
+        { $match: { isActive: true, kuratorId } },
         {
           $group: {
             _id: null,
@@ -410,7 +412,7 @@ const getAnalytics = asyncHandler(async (req, res) => {
       ]),
 
       Student.aggregate([
-        { $match: { isActive: true, groupId: { $exists: true, $ne: null } } },
+        { $match: { isActive: true, groupId: { $exists: true, $ne: null }, kuratorId } },
         { $lookup: { from: "groups", localField: "groupId", foreignField: "_id", as: "grp" } },
         { $unwind: { path: "$grp", preserveNullAndEmptyArrays: true } },
         {

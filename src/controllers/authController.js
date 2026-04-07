@@ -5,8 +5,6 @@ const Attendance = require("../models/Attendance");
 const AttendanceStatusLog = require("../models/AttendanceStatusLog");
 const CalledStudent = require("../models/CalledStudent");
 const TaNotificationTask = require("../models/TaNotificationTask");
-const CoddyAttendance = require("../coddyCheck/models/CoddyAttendance");
-const CoddyTeacher = require("../coddyCheck/models/CoddyTeacher");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { created, ok } = require("../utils/response");
@@ -45,10 +43,10 @@ const register = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Parol kiritilishi shart");
   }
 
-  // Only one account allowed in the system
-  const existingCount = await User.countDocuments({ role: "kurator" });
-  if (existingCount > 0) {
-    throw new ApiError(403, "Tizimda allaqachon akkaunt mavjud. Yangi ro'yxatdan o'tish mumkin emas.");
+  // Check uniqueness by phone across all users
+  const existingByPhone = await User.findOne({ phone });
+  if (existingByPhone) {
+    throw new ApiError(409, "Bu telefon raqam allaqachon ro'yxatdan o'tgan.");
   }
 
   const user = await User.create({
@@ -194,29 +192,35 @@ const deleteAccount = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Parol noto'g'ri. Akkaunt o'chirilmadi.");
   }
 
-  // Single-curator system: wipe ALL data from every collection
+  const kuratorId = user._id;
+
+  // Delete only records belonging to this kurator
   await Promise.all([
-    AttendanceStatusLog.deleteMany({}),
-    Attendance.deleteMany({}),
-    CalledStudent.deleteMany({}),
-    TaNotificationTask.deleteMany({}),
-    CoddyAttendance.deleteMany({}),
-    CoddyTeacher.deleteMany({}),
+    AttendanceStatusLog.deleteMany({ kuratorId }),
+    Attendance.deleteMany({ kuratorId }),
+    CalledStudent.deleteMany({ kuratorId }),
+    TaNotificationTask.deleteMany({ kuratorId }),
   ]);
 
-  await Student.deleteMany({});
-  await Group.deleteMany({});
-  await User.deleteMany({});
+  await Student.deleteMany({ kuratorId });
+  await Group.deleteMany({ kuratorId });
+  // Delete workers belonging to this kurator
+  await User.deleteMany({ kuratorId });
+  // Delete the kurator account itself
+  await User.findByIdAndDelete(kuratorId);
 
   return ok(res, null, "Akkaunt va barcha ma'lumotlar o'chirildi");
 });
 
-// In-memory OTP store (single-curator system)
-let _resetStore = null; // { code, expiresAt }
+// In-memory OTP store: phone → { code, expiresAt, attempts }
+const _resetStore = new Map();
 
 const forgotPassword = asyncHandler(async (req, res) => {
-  const kurator = await User.findOne({ role: "kurator", isActive: true });
-  if (!kurator) throw new ApiError(404, "Kurator akkaunt topilmadi");
+  const phone = normalizePhone(req.body);
+  if (!phone) throw new ApiError(400, "Telefon raqamini kiriting");
+
+  const kurator = await User.findOne({ phone, role: "kurator", isActive: true });
+  if (!kurator) throw new ApiError(404, "Bu telefon raqam bilan kurator topilmadi");
 
   const telegramId = kurator.telegramId;
   if (!telegramId) {
@@ -236,40 +240,43 @@ const forgotPassword = asyncHandler(async (req, res) => {
     { parse_mode: "Markdown" }
   );
 
-  _resetStore = { code, expiresAt, attempts: 0 };
+  _resetStore.set(phone, { code, expiresAt, attempts: 0 });
   return ok(res, null, "Kod Telegram botga yuborildi");
 });
 
 const resetPassword = asyncHandler(async (req, res) => {
+  const phone = normalizePhone(req.body);
   const code = String(req.body.code || "").trim();
   const newPassword = String(req.body.newPassword || "").trim();
 
+  if (!phone) throw new ApiError(400, "Telefon raqamini kiriting");
   if (!code) throw new ApiError(400, "Kodni kiriting");
   if (!newPassword || newPassword.length < 4) {
     throw new ApiError(400, "Yangi parol kamida 4 ta belgidan iborat bo'lishi kerak");
   }
 
-  if (!_resetStore) throw new ApiError(400, "Avval kod yuborish so'rovini qiling");
-  if (Date.now() > _resetStore.expiresAt) {
-    _resetStore = null;
+  const store = _resetStore.get(phone);
+  if (!store) throw new ApiError(400, "Avval kod yuborish so'rovini qiling");
+  if (Date.now() > store.expiresAt) {
+    _resetStore.delete(phone);
     throw new ApiError(400, "Kod muddati tugagan. Qaytadan urinib ko'ring");
   }
-  if (_resetStore.attempts >= 5) {
-    _resetStore = null;
+  if (store.attempts >= 5) {
+    _resetStore.delete(phone);
     throw new ApiError(400, "Juda ko'p noto'g'ri urinish. Qaytadan kod so'rang.");
   }
-  if (code !== _resetStore.code) {
-    _resetStore.attempts += 1;
+  if (code !== store.code) {
+    store.attempts += 1;
     throw new ApiError(400, "Kod noto'g'ri");
   }
 
-  const kurator = await User.findOne({ role: "kurator", isActive: true }).select("+password");
+  const kurator = await User.findOne({ phone, role: "kurator", isActive: true }).select("+password");
   if (!kurator) throw new ApiError(404, "Kurator topilmadi");
 
   kurator.password = newPassword;
   await kurator.save();
 
-  _resetStore = null;
+  _resetStore.delete(phone);
   return ok(res, null, "Parol muvaffaqiyatli yangilandi");
 });
 

@@ -66,8 +66,9 @@ function calcBotStatus(telegramId, startedSet, activityMap) {
 
 const listWorkers = asyncHandler(async (req, res) => {
   const q = normalizeText(req.query.q || "").toLowerCase();
+  const kuratorId = req.user._id;
 
-  const query = { role: { $in: STAFF_ROLES } };
+  const query = { role: { $in: STAFF_ROLES }, kuratorId };
   const users = await User.find(query).sort({ isActive: -1, fullName: 1 });
 
   const filtered = q
@@ -115,6 +116,7 @@ const createWorker = asyncHandler(async (req, res) => {
   const telegramId = normalizeTelegramId(req.body.telegramId);
   const role = normalizeText(req.body.role).toLowerCase();
   const color = parseWorkerColor(req.body.color, DEFAULT_WORKER_COLOR);
+  const kuratorId = req.user._id;
 
   if (!fullName || !telegramId || !STAFF_ROLES.includes(role)) {
     throw new ApiError(400, "fullName, telegramId va role (mentor/ta/mentor_ta) majburiy");
@@ -133,15 +135,17 @@ const createWorker = asyncHandler(async (req, res) => {
     telegramId,
     color,
     password: tempPassword,
-    isActive: true
+    isActive: true,
+    kuratorId
   });
 
   return created(res, toWorkerDto(user), "Ishchi qo'shildi");
 });
 
 const updateWorker = asyncHandler(async (req, res) => {
-  const worker = await User.findById(req.params.id);
-  if (!worker || worker.role === "kurator") {
+  const kuratorId = req.user._id;
+  const worker = await User.findOne({ _id: req.params.id, kuratorId, role: { $in: STAFF_ROLES } });
+  if (!worker) {
     throw new ApiError(404, "Ishchi topilmadi");
   }
 
@@ -176,8 +180,9 @@ const updateWorker = asyncHandler(async (req, res) => {
 });
 
 const deleteWorker = asyncHandler(async (req, res) => {
-  const worker = await User.findById(req.params.id);
-  if (!worker || worker.role === "kurator") {
+  const kuratorId = req.user._id;
+  const worker = await User.findOne({ _id: req.params.id, kuratorId, role: { $in: STAFF_ROLES } });
+  if (!worker) {
     throw new ApiError(404, "Ishchi topilmadi");
   }
 
@@ -187,8 +192,9 @@ const deleteWorker = asyncHandler(async (req, res) => {
 });
 
 const notifyWorker = asyncHandler(async (req, res) => {
-  const worker = await User.findById(req.params.id);
-  if (!worker || worker.role === "kurator") {
+  const kuratorId = req.user._id;
+  const worker = await User.findOne({ _id: req.params.id, kuratorId, role: { $in: STAFF_ROLES } });
+  if (!worker) {
     throw new ApiError(404, "Ishchi topilmadi");
   }
 

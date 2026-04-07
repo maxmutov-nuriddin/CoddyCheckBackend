@@ -54,6 +54,12 @@ const attendanceSchema = new mongoose.Schema(
     arrivalConfirmedAt: {
       type: Date,
       default: null
+    },
+    kuratorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true
     }
   },
   { timestamps: true }

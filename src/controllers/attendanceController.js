@@ -326,7 +326,7 @@ async function syncBotCallActivityToCalledStudent(botRow, changes = {}) {
 
   const fullNameRegex = new RegExp(`^${escapeRegExp(studentName)}$`, "i");
   const candidates = await Student.find({ fullName: fullNameRegex, isActive: true })
-    .select("_id groupId")
+    .select("_id groupId kuratorId")
     .lean();
   if (!candidates.length) return null;
 
@@ -343,6 +343,8 @@ async function syncBotCallActivityToCalledStudent(botRow, changes = {}) {
       if (matched) targetStudent = matched;
     }
   }
+
+  const botKuratorId = targetStudent.kuratorId || null;
 
   let record = await CalledStudent.findOne({ studentId: targetStudent._id, date: targetDay });
 
@@ -371,7 +373,8 @@ async function syncBotCallActivityToCalledStudent(botRow, changes = {}) {
         calledAt: new Date(),
         resolvedAt: isResolved ? new Date() : null
       }],
-      lastStatus: mappedStatus
+      lastStatus: mappedStatus,
+      kuratorId: botKuratorId
     });
   }
 
@@ -447,6 +450,7 @@ async function reconcileBotCallsToCalledStudentsByDate(dateInput) {
 
 const manualAttendance = asyncHandler(async (req, res) => {
   const { studentId, date, attendanceStatus, comment = "" } = req.body;
+  const kuratorId = req.user._id;
 
   if (!studentId || !date || !attendanceStatus) {
     throw new ApiError(400, "studentId, date and attendanceStatus are required");
@@ -456,7 +460,7 @@ const manualAttendance = asyncHandler(async (req, res) => {
     throw new ApiError(400, "attendanceStatus must be keldi or kelmadi");
   }
 
-  const student = await Student.findById(studentId).lean();
+  const student = await Student.findOne({ _id: studentId, kuratorId }).lean();
   if (!student) {
     throw new ApiError(404, "Student not found");
   }
@@ -465,7 +469,7 @@ const manualAttendance = asyncHandler(async (req, res) => {
   const dayStr = formatYMD(normalizedDate);
 
   // 1. Check if an Attendance record exists for today
-  let attendance = await Attendance.findOne({ studentId, date: normalizedDate });
+  let attendance = await Attendance.findOne({ studentId, date: normalizedDate, kuratorId });
   if (attendance) {
     if (attendance.attendanceStatus) {
       // It has a final mark (Keldi/Kelmadi), block.
@@ -522,7 +526,8 @@ const manualAttendance = asyncHandler(async (req, res) => {
     callStatus: wasCalled ? "chaqirilgan" : "chaqirilmagan",
     attendanceStatus,
     comment,
-    botIntegration: wasCalled
+    botIntegration: wasCalled,
+    kuratorId
   });
 
   await syncCalledStudentStatus({ studentId: attendance.studentId, date: normalizedDate, status: attendanceStatus });
@@ -532,6 +537,7 @@ const manualAttendance = asyncHandler(async (req, res) => {
 
 const queueTaNotification = asyncHandler(async (req, res) => {
   const { studentName, direction, date, time = "", comment = "" } = req.body;
+  const kuratorId = req.user._id;
   const normalizedName = String(studentName || "").trim().replace(/\s+/g, " ");
   const normalizedDirection = normalizeDirection(direction);
 
@@ -548,7 +554,8 @@ const queueTaNotification = asyncHandler(async (req, res) => {
     date: notifyDate,
     time: notifyTime,
     comment: String(comment || "").trim(),
-    createdBy: req.user._id
+    createdBy: kuratorId,
+    kuratorId
   });
 
   return created(res, task, "TA xabarnomasi 09:00 uchun rejalashtirildi");
@@ -583,7 +590,8 @@ const confirmBotCallRequest = asyncHandler(async (req, res) => {
     date: notifyDate,
     time: notifyTime,
     comment: normalizedComment,
-    createdBy: req.user._id
+    createdBy: req.user._id,
+    kuratorId: req.user._id
   });
 
   request.callConfirmed = true;
@@ -625,12 +633,13 @@ const confirmBotCallRequest = asyncHandler(async (req, res) => {
 
 const callStudent = asyncHandler(async (req, res) => {
   const { studentId, date, time, comment = "" } = req.body;
+  const kuratorId = req.user._id;
 
   if (!studentId || !date) {
     throw new ApiError(400, "studentId and date are required");
   }
 
-  const student = await Student.findById(studentId).lean();
+  const student = await Student.findOne({ _id: studentId, kuratorId }).lean();
   if (!student) {
     throw new ApiError(404, "Student not found");
   }
@@ -645,7 +654,8 @@ const callStudent = asyncHandler(async (req, res) => {
     studentId,
     date: { $gte: start, $lte: end },
     callStatus: "chaqirilgan",
-    attendanceStatus: null
+    attendanceStatus: null,
+    kuratorId
   }).sort({ createdAt: -1 });
 
   if (pendingWebCall) {
@@ -686,7 +696,8 @@ const callStudent = asyncHandler(async (req, res) => {
     callStatus: "chaqirilgan",
     attendanceStatus: null,
     comment,
-    botIntegration: true
+    botIntegration: true,
+    kuratorId
   });
 
   return created(res, attendance, "Student called successfully");
@@ -762,7 +773,8 @@ const recallStudent = asyncHandler(async (req, res) => {
     callStatus: "chaqirilgan",
     attendanceStatus: null,
     comment,
-    botIntegration: true
+    botIntegration: true,
+    kuratorId: previous.kuratorId || req.user._id
   });
 
   return created(res, newRecord, "Student re-called successfully");
@@ -772,10 +784,12 @@ const recallStudent = asyncHandler(async (req, res) => {
 const getCalledList = asyncHandler(async (req, res) => {
   const date = req.query.date || formatYMD(new Date());
   const { start, end } = getDayBounds(date);
+  const kuratorId = req.user._id;
 
   const rows = await Attendance.find({
     date: { $gte: start, $lte: end },
-    callStatus: "chaqirilgan"
+    callStatus: "chaqirilgan",
+    kuratorId
   })
     .populate("studentId", "fullName")
     .populate("groupId", "name")
@@ -795,10 +809,12 @@ const getDailyReport = asyncHandler(async (req, res) => {
   }
 
   const { start, end } = getDayBounds(date);
+  const kuratorId = req.user._id;
 
   const rows = await Attendance.find({
     date: { $gte: start, $lte: end },
-    callStatus: "chaqirilgan"
+    callStatus: "chaqirilgan",
+    kuratorId
   })
     .populate("studentId", "fullName")
     .populate("groupId", "name")
@@ -836,6 +852,7 @@ const getDailyReport = asyncHandler(async (req, res) => {
 
 const getResults = asyncHandler(async (req, res) => {
   const { dateFrom, dateTo, groupBy = "day" } = req.query;
+  const kuratorId = req.user._id;
 
   const start = dateFrom ? new Date(dateFrom) : new Date();
   const end = dateTo ? new Date(dateTo) : new Date();
@@ -843,7 +860,8 @@ const getResults = asyncHandler(async (req, res) => {
   end.setHours(23, 59, 59, 999);
 
   const filter = {
-    date: { $gte: start, $lte: end }
+    date: { $gte: start, $lte: end },
+    kuratorId
   };
 
   const botMatch = {
@@ -855,7 +873,7 @@ const getResults = asyncHandler(async (req, res) => {
     CoddyAttendance.find(botMatch).lean(),
     loadActiveStaffForMatching(),
     loadKuratorTelegramIdSet(),
-    Student.countDocuments({ isActive: true, frozenStatus: { $nin: FROZEN_STATUSES } })
+    Student.countDocuments({ isActive: true, frozenStatus: { $nin: FROZEN_STATUSES }, kuratorId })
   ]);
 
   const botDatesForReconcile = Array.from(
@@ -882,7 +900,7 @@ const getResults = asyncHandler(async (req, res) => {
     );
   }
 
-  const platformCallsRaw = await CalledStudent.find(filter).lean();
+  const platformCallsRaw = await CalledStudent.find({ ...filter, kuratorId }).lean();
 
   const roleByTelegramId = buildRoleByTelegramIdMap(staff);
   const todayYmd = getTodayYmdInTimezone(env.appTimezone);
@@ -1003,9 +1021,10 @@ const getResults = asyncHandler(async (req, res) => {
 
 const getRecentActivity = asyncHandler(async (req, res) => {
   const { date, status = "Barchasi", search = "", sort = "date-desc" } = req.query;
+  const kuratorId = req.user._id;
 
   const coddyQuery = { requestType: { $ne: "talk_request" } };
-  const attendanceQuery = {};
+  const attendanceQuery = { kuratorId };
 
   if (date) {
     const { start, end } = getDayBounds(date);
@@ -1196,10 +1215,11 @@ const deleteActivity = asyncHandler(async (req, res) => {
 
 const getAllActivity = asyncHandler(async (req, res) => {
   const { date, status = "Barchasi", search = "", sort = "date-desc" } = req.query;
+  const kuratorId = req.user._id;
 
   // Only "mark" requestType from bot — excludes oquvchi_chaqirish (call_extra, keep)
   const coddyQuery = { requestType: "mark" };
-  const attendanceQuery = {};
+  const attendanceQuery = { kuratorId };
 
   if (date) {
     const { start, end } = getDayBounds(date);
@@ -1364,14 +1384,15 @@ const getBotCalls = asyncHandler(async (req, res) => {
 
 const createCalledStudent = asyncHandler(async (req, res) => {
   const { studentId, date, time = "", comment = "" } = req.body;
+  const kuratorId = req.user._id;
 
   if (!studentId || !date) throw new ApiError(400, "studentId and date are required");
 
-  const student = await Student.findById(studentId).lean();
+  const student = await Student.findOne({ _id: studentId, kuratorId }).lean();
   if (!student) throw new ApiError(404, "Student not found");
 
   const normalizedDate = normalizeDateOnly(date);
-  const existingRecord = await CalledStudent.findOne({ studentId, date: normalizedDate });
+  const existingRecord = await CalledStudent.findOne({ studentId, date: normalizedDate, kuratorId });
   if (existingRecord) {
     const latestCall = Array.isArray(existingRecord.calls) && existingRecord.calls.length > 0
       ? existingRecord.calls[existingRecord.calls.length - 1]
@@ -1393,12 +1414,12 @@ const createCalledStudent = asyncHandler(async (req, res) => {
   };
 
   const record = await CalledStudent.findOneAndUpdate(
-    { studentId, date: normalizedDate },
+    { studentId, date: normalizedDate, kuratorId },
     {
       $inc: { callCount: 1 },
       $push: { calls: callEntry },
       $set: { lastStatus: "pending" },
-      $setOnInsert: { groupId: student.groupId || undefined }
+      $setOnInsert: { groupId: student.groupId || undefined, kuratorId }
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
@@ -1627,11 +1648,12 @@ const getCalledStudents = asyncHandler(async (req, res) => {
   const date = req.query.date;
   const studentIds = parseObjectIdCsv(req.query.studentIds);
   const liteMode = isAttendanceLiteRequest(req);
-  let filter = {};
+  const kuratorId = req.user._id;
+  let filter = { kuratorId };
   if (date) {
     await reconcileBotCallsToCalledStudentsByDate(date);
     const { start, end } = getDayBounds(date);
-    filter = { date: { $gte: start, $lte: end } };
+    filter.date = { $gte: start, $lte: end };
   }
   if (studentIds.length > 0) {
     filter.studentId = { $in: studentIds };

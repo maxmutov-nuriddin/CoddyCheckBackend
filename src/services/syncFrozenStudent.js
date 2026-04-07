@@ -10,7 +10,7 @@ const FrozenStudent = require("../models/FrozenStudent");
  *
  * Idempotent: safe to call multiple times for the same student.
  */
-async function syncFrozenStudent(student) {
+async function syncFrozenStudent(student, kuratorId) {
   try {
     if (student.frozenStatus === "frozen") {
       const existing = await FrozenStudent.findOne({ studentId: student._id });
@@ -20,7 +20,8 @@ async function syncFrozenStudent(student) {
           studentId: student._id,
           fullName: student.fullName,
           profileLink: student.profileUrl || "",
-          status: "muzlatilgan"
+          status: "muzlatilgan",
+          kuratorId: kuratorId || student.kuratorId || null
         });
       } else {
         // Only update name + link — do NOT touch status

@@ -15,7 +15,8 @@ async function updateAttendanceStatus({ attendance, newStatus, changedBy, source
     previousStatus,
     newStatus,
     changedBy,
-    source
+    source,
+    kuratorId: attendance.kuratorId || null
   });
 
   return attendance;

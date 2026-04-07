@@ -42,12 +42,14 @@ function mapIncomingStatus(value) {
 }
 
 const getGroups = asyncHandler(async (req, res) => {
-   const groups = await Group.find().sort({ days: -1, time: 1, name: 1 });
+   const kuratorId = req.user._id;
+   const groups = await Group.find({ kuratorId }).sort({ days: -1, time: 1, name: 1 });
    return ok(res, groups, "Groups list");
 });
 
 const createGroup = asyncHandler(async (req, res) => {
    const { name, days, time, mentor } = req.body;
+   const kuratorId = req.user._id;
 
    if (!name || !days || !time || !mentor) {
       throw new ApiError(400, "Barcha maydonlar to'ldirilishi shart");
@@ -57,7 +59,7 @@ const createGroup = asyncHandler(async (req, res) => {
       throw new ApiError(400, "Kunlar faqat 'Toq' yoki 'Juft' bo'lishi mumkin");
    }
 
-   const exists = await Group.findOne({ name, days });
+   const exists = await Group.findOne({ name, days, kuratorId });
    if (exists) {
       throw new ApiError(400, "Bu guruh allaqachon mavjud");
    }
@@ -66,7 +68,8 @@ const createGroup = asyncHandler(async (req, res) => {
       name,
       days,
       time,
-      mentor
+      mentor,
+      kuratorId
    });
 
    return created(res, group, "Guruh yaratildi");
@@ -74,14 +77,15 @@ const createGroup = asyncHandler(async (req, res) => {
 
 const deleteGroup = asyncHandler(async (req, res) => {
    const { id } = req.params;
+   const kuratorId = req.user._id;
 
-   const group = await Group.findById(id);
+   const group = await Group.findOne({ _id: id, kuratorId });
    if (!group) {
       throw new ApiError(404, "Guruh topilmadi");
    }
 
    // Check if group has active students
-   const studentCount = await Student.countDocuments({ groupId: id, isActive: true });
+   const studentCount = await Student.countDocuments({ groupId: id, isActive: true, kuratorId });
    if (studentCount > 0) {
       throw new ApiError(400, `Guruhda ${studentCount} ta o'quvchi bor. Avval ularni o'chiring yoki boshqa guruhga o'tkazing.`);
    }
@@ -94,8 +98,9 @@ const deleteGroup = asyncHandler(async (req, res) => {
 const updateGroup = asyncHandler(async (req, res) => {
    const { id } = req.params;
    const { name, days, time, mentor } = req.body;
+   const kuratorId = req.user._id;
 
-   const group = await Group.findById(id);
+   const group = await Group.findOne({ _id: id, kuratorId });
    if (!group) {
       throw new ApiError(404, "Guruh topilmadi");
    }
@@ -112,6 +117,7 @@ const updateGroup = asyncHandler(async (req, res) => {
 
 const bulkAddStudents = asyncHandler(async (req, res) => {
    const { id } = req.params;
+   const kuratorId = req.user._id;
    const incomingStudents = Array.isArray(req.body?.students) ? req.body.students : [];
 
    if (incomingStudents.length === 0) {
@@ -122,12 +128,12 @@ const bulkAddStudents = asyncHandler(async (req, res) => {
       throw new ApiError(400, `Bir martada ko'pi bilan ${MAX_BULK_STUDENTS} ta o'quvchi qo'shish mumkin`);
    }
 
-   const group = await Group.findById(id).lean();
+   const group = await Group.findOne({ _id: id, kuratorId }).lean();
    if (!group) {
       throw new ApiError(404, "Guruh topilmadi");
    }
 
-   const existingStudents = await Student.find({ groupId: id, isActive: true }).select("fullName").lean();
+   const existingStudents = await Student.find({ groupId: id, isActive: true, kuratorId }).select("fullName").lean();
    const existingNameSet = new Set(existingStudents.map((row) => normalizeNameKey(row.fullName)));
    const requestNameSet = new Set();
 
@@ -157,7 +163,8 @@ const bulkAddStudents = asyncHandler(async (req, res) => {
          frozenStatus: mapIncomingStatus(row?.status),
          comment: sanitizeText(row?.izoh ?? row?.comment ?? "", 500),
          profileUrl: sanitizeProfileUrl(row?.link ?? row?.profileUrl ?? ""),
-         isActive: true
+         isActive: true,
+         kuratorId
       });
    });
 

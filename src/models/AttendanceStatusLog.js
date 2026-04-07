@@ -27,6 +27,12 @@ const attendanceStatusLogSchema = new mongoose.Schema(
       type: String,
       enum: ["manual", "cron", "bot"],
       default: "manual"
+    },
+    kuratorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true
     }
   },
   { timestamps: true }

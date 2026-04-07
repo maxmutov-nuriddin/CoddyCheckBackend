@@ -21,6 +21,12 @@ const groupSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true
+    },
+    kuratorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true
     }
   },
   { timestamps: true }

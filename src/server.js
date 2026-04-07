@@ -4,6 +4,7 @@ const connectDb = require("./config/db");
 const env = require("./config/env");
 const startAttendanceJobs = require("./cron/attendanceJobs");
 const { startCoddyCheckBot, stopCoddyCheckBot } = require("./coddyCheck/bot");
+const assignKuratorIds = require("./migrations/assignKuratorIds");
 
 let server = null;
 let isShuttingDown = false;
@@ -51,6 +52,8 @@ async function shutdown(signal) {
 async function bootstrap() {
   try {
     await connectDb();
+    // Migrate existing data: assign kuratorId to all records if only one kurator exists
+    await assignKuratorIds();
     server = await startHttpServer();
     startAttendanceJobs();
 

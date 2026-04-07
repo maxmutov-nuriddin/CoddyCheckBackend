@@ -45,6 +45,14 @@ const userSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: true
+    },
+    // For workers (mentor/ta/mentor_ta): links to their kurator's User._id
+    // null for kurator accounts themselves
+    kuratorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true
     }
   },
   { timestamps: true }
@@ -54,6 +62,8 @@ const userSchema = new mongoose.Schema(
 userSchema.index({ telegramId: 1, isActive: 1, role: 1 });
 // Analytics + cron: User.find({ role:$in, isActive:true }) — fires every 30s refresh
 userSchema.index({ role: 1, isActive: 1 });
+// Worker lookup by kurator
+userSchema.index({ kuratorId: 1, role: 1, isActive: 1 });
 
 userSchema.pre("save", async function hashPassword(next) {
   if (!this.isModified("password")) {

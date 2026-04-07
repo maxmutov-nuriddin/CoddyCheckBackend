@@ -20,6 +20,12 @@ const frozenStudentSchema = new mongoose.Schema(
     status: {
       type: String,
       default: "muzlatilgan"
+    },
+    kuratorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true
     }
   },
   { timestamps: true }

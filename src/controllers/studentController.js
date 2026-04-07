@@ -13,8 +13,9 @@ function escapeRegex(str) {
 const getStudents = asyncHandler(async (req, res) => {
   const { groupId, search, isActive, lite } = req.query;
   const liteMode = String(lite || "").toLowerCase();
+  const kuratorId = req.user._id;
 
-  const filter = {};
+  const filter = { kuratorId };
   if (groupId === "none") {
     filter.$or = [{ groupId: null }, { groupId: { $exists: false } }];
   } else if (groupId) {
@@ -46,13 +47,14 @@ const getStudents = asyncHandler(async (req, res) => {
 
 const createStudent = asyncHandler(async (req, res) => {
   const { fullName, groupId, frozenStatus = null, comment = "", profileUrl = "" } = req.body;
+  const kuratorId = req.user._id;
 
   if (!fullName) {
     throw new ApiError(400, "fullName is required");
   }
 
   if (groupId) {
-    const group = await Group.findById(groupId);
+    const group = await Group.findOne({ _id: groupId, kuratorId });
     if (!group) {
       throw new ApiError(404, "Group not found");
     }
@@ -63,11 +65,12 @@ const createStudent = asyncHandler(async (req, res) => {
     groupId,
     frozenStatus,
     comment,
-    profileUrl
+    profileUrl,
+    kuratorId
   });
 
   // Sync with FrozenStudent if created with frozen status
-  await syncFrozenStudent(student);
+  await syncFrozenStudent(student, kuratorId);
 
   return created(res, student, "Student created");
 });
@@ -75,8 +78,9 @@ const createStudent = asyncHandler(async (req, res) => {
 const updateStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { fullName, groupId, frozenStatus, comment, isActive, profileUrl } = req.body;
+  const kuratorId = req.user._id;
 
-  const student = await Student.findById(id);
+  const student = await Student.findOne({ _id: id, kuratorId });
   if (!student) {
     throw new ApiError(404, "Student not found");
   }
@@ -84,7 +88,7 @@ const updateStudent = asyncHandler(async (req, res) => {
   if (groupId === null || groupId === "none" || groupId === "") {
     student.groupId = null;
   } else if (groupId) {
-    const group = await Group.findById(groupId);
+    const group = await Group.findOne({ _id: groupId, kuratorId });
     if (!group) {
       throw new ApiError(404, "Group not found");
     }
@@ -100,15 +104,16 @@ const updateStudent = asyncHandler(async (req, res) => {
   await student.save();
 
   // Auto-sync with FrozenStudent collection
-  await syncFrozenStudent(student);
+  await syncFrozenStudent(student, kuratorId);
 
   return ok(res, student, "Student updated");
 });
 
 const deleteStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const kuratorId = req.user._id;
 
-  const student = await Student.findById(id);
+  const student = await Student.findOne({ _id: id, kuratorId });
   if (!student) {
     throw new ApiError(404, "Student not found");
   }
@@ -124,6 +129,7 @@ const deleteStudent = asyncHandler(async (req, res) => {
 
 const getFrozenStudents = asyncHandler(async (req, res) => {
   const { status } = req.query;
+  const kuratorId = req.user._id;
 
   // 1. Regular students with explicit frozen statuses
   // Backward compatibility: old rows may store "frozen" instead of "muzlatilgan".
@@ -138,7 +144,8 @@ const getFrozenStudents = asyncHandler(async (req, res) => {
 
   const studentFilter = {
     frozenStatus: statusFilter,
-    isActive: true
+    isActive: true,
+    kuratorId
   };
 
   const rawStudents = await Student.find(studentFilter)
@@ -159,7 +166,7 @@ const getFrozenStudents = asyncHandler(async (req, res) => {
   let syncedRows = [];
 
   if (includeSynced) {
-    const frozenRecords = await FrozenStudent.find({}).sort({ updatedAt: -1 });
+    const frozenRecords = await FrozenStudent.find({ kuratorId }).sort({ updatedAt: -1 });
 
     if (frozenRecords.length > 0) {
       // Fetch the actual Student documents in one query

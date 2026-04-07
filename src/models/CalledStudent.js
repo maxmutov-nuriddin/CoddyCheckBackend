@@ -49,6 +49,12 @@ const calledStudentSchema = new mongoose.Schema({
       type: String,
       enum: ["pending", "keldi", "kelmadi"],
       default: "pending"
+   },
+   kuratorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+      index: true
    }
 }, { timestamps: true });
 
