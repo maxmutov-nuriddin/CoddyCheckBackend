@@ -10,8 +10,14 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ["kurator", "ta", "mentor", "mentor_ta"],
+      enum: ["kurator", "ta", "mentor", "mentor_ta", "support"],
       required: true
+    },
+    // For kurators: "pending" = waiting for support approval, "approved" = can login
+    registrationStatus: {
+      type: String,
+      enum: ["pending", "approved"],
+      default: "approved"
     },
     specialization: {
       type: String,

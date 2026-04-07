@@ -49,29 +49,54 @@ const register = asyncHandler(async (req, res) => {
     throw new ApiError(409, "Bu telefon raqam allaqachon ro'yxatdan o'tgan.");
   }
 
+  // Create kurator as "pending" — support must approve before they can login
   const user = await User.create({
     fullName,
     role: "kurator",
     phone,
     telegramId,
     password,
+    registrationStatus: "pending",
+    isActive: false,
   });
 
-  const token = signToken(user);
+  // Notify support via Telegram
+  try {
+    const support = await User.findOne({ role: "support", isActive: true }).lean();
+    if (support?.telegramId) {
+      const { getBotInstance } = require("../coddyCheck/bot");
+      const bot = getBotInstance();
+      if (bot) {
+        const msg = [
+          `📋 *Yangi kurator so'rovi!*`,
+          ``,
+          `👤 Ism: ${fullName}`,
+          `📱 Telefon: ${phone}`,
+          `🆔 Telegram ID: ${telegramId || "kiritilmagan"}`,
+          ``,
+          `👉 CoddyCheck support paneliga o'tib so'rovni ko'rib chiqing.`
+        ].join("\n");
+        await bot.telegram.sendMessage(Number(support.telegramId), msg, { parse_mode: "Markdown" });
+      }
+    }
+  } catch (notifyErr) {
+    console.error("[register] Support notification failed:", notifyErr.message);
+  }
 
   return created(
     res,
     {
-      token,
+      pending: true,
       user: {
         _id: user._id,
         fullName: user.fullName,
         role: user.role,
         phone: user.phone,
         telegramId: user.telegramId,
+        registrationStatus: user.registrationStatus,
       },
     },
-    "Kurator registered"
+    "So'rov yuborildi. Support tasdiqlashini kuting."
   );
 });
 
@@ -83,18 +108,23 @@ const login = asyncHandler(async (req, res) => {
     throw new ApiError(400, "phone and password are required");
   }
 
-  const user = await User.findOne({ phone, role: "kurator" }).select("+password");
+  const user = await User.findOne({ phone, role: { $in: ["kurator", "support"] } }).select("+password");
   if (!user) {
-    throw new ApiError(401, "Invalid credentials. Kurator not found for this phone");
+    throw new ApiError(401, "Telefon raqam yoki parol noto'g'ri");
   }
 
   const isPasswordValid = await user.comparePassword(password);
   if (!isPasswordValid) {
-    throw new ApiError(401, "Invalid credentials. Please re-register this phone once");
+    throw new ApiError(401, "Telefon raqam yoki parol noto'g'ri");
   }
 
-  if (!user.isActive) {
-    throw new ApiError(403, "User is inactive");
+  // Kurators must be approved before they can login
+  if (user.role === "kurator" && user.registrationStatus === "pending") {
+    throw new ApiError(403, "So'rovingiz hali ko'rib chiqilmagan. Support tasdiqlashini kuting.");
+  }
+
+  if (!user.isActive && user.role !== "kurator") {
+    throw new ApiError(403, "Foydalanuvchi faol emas");
   }
 
   const token = signToken(user);
@@ -108,7 +138,8 @@ const login = asyncHandler(async (req, res) => {
         fullName: user.fullName,
         role: user.role,
         phone: user.phone,
-        telegramId: user.telegramId
+        telegramId: user.telegramId,
+        registrationStatus: user.registrationStatus
       }
     },
     "Logged in"
@@ -122,7 +153,8 @@ const getMe = asyncHandler(async (req, res) => {
     fullName: user.fullName,
     role: user.role,
     phone: user.phone,
-    telegramId: user.telegramId
+    telegramId: user.telegramId,
+    registrationStatus: user.registrationStatus
   });
 });
 

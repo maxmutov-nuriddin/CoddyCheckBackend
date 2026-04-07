@@ -15,6 +15,41 @@ const FrozenStudent = require("../models/FrozenStudent");
 const TaNotificationTask = require("../models/TaNotificationTask");
 const AttendanceStatusLog = require("../models/AttendanceStatusLog");
 
+// Ensure support account exists with correct phone format
+async function ensureSupportAccount() {
+  try {
+    const existing = await User.findOne({ role: "support" });
+
+    if (existing) {
+      // Normalize phone to digits-only format (no +) to match login flow
+      const normalized = String(existing.phone || "").replace(/\D/g, "");
+      if (existing.phone !== normalized) {
+        existing.phone = normalized;
+        await existing.save();
+        console.log("[migration] Support account phone normalized to", normalized);
+      }
+      return;
+    }
+
+    await User.create({
+      fullName: "Support",
+      role: "support",
+      phone: "998943322218",
+      telegramId: "943322218",
+      password: "1234",
+      isActive: true,
+      registrationStatus: "approved"
+    });
+
+    console.log("[migration] Support account created: phone=998943322218");
+  } catch (err) {
+    // Ignore duplicate key errors (account already exists)
+    if (err.code !== 11000) {
+      console.error("[migration] ensureSupportAccount failed:", err.message);
+    }
+  }
+}
+
 async function assignKuratorIds() {
   try {
     const kurators = await User.find({ role: "kurator" }).lean();
@@ -65,4 +100,9 @@ async function assignKuratorIds() {
   }
 }
 
-module.exports = assignKuratorIds;
+async function runMigrations() {
+  await ensureSupportAccount();
+  await assignKuratorIds();
+}
+
+module.exports = runMigrations;
