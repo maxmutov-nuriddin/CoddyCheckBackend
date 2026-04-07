@@ -35,7 +35,7 @@ async function ensureSupportAccount() {
       fullName: "Support",
       role: "support",
       phone: "998943322218",
-      telegramId: "943322218",
+      telegramId: "1604384939",
       password: "1234",
       isActive: true,
       registrationStatus: "approved"
