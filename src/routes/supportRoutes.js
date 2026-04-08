@@ -8,6 +8,7 @@ const {
   getAllKuratorsAnalytics,
   listKurators,
   toggleKuratorStatus,
+  updateKuratorFilials,
   deleteKurator,
 } = require("../controllers/supportController");
 
@@ -23,6 +24,7 @@ router.get("/analytics", getAllKuratorsAnalytics);
 
 router.get("/kurators", listKurators);
 router.patch("/kurators/:id/toggle", toggleKuratorStatus);
+router.patch("/kurators/:id/filials", updateKuratorFilials);
 router.delete("/kurators/:id", deleteKurator);
 
 module.exports = router;

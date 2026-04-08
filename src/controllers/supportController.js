@@ -88,7 +88,7 @@ const rejectRequest = asyncHandler(async (req, res) => {
 // Monthly stats for all approved kurators
 const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
   const kurators = await User.find({ role: "kurator", registrationStatus: "approved", isActive: true })
-    .select("_id fullName phone telegramId createdAt")
+    .select("_id fullName phone telegramId createdAt filials")
     .sort({ createdAt: -1 })
     .lean();
 
@@ -137,6 +137,7 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
         phone: k.phone,
         telegramId: k.telegramId,
         registeredAt: k.createdAt,
+        filials: k.filials || [],
         stats: {
           activeStudents,
           leadStudents,
@@ -162,16 +163,30 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
 // ── GET /api/support/kurators  ─────────────────────────────────────────────
 // All approved kurators (for management)
 const listKurators = asyncHandler(async (req, res) => {
-  // Include approved kurators + legacy ones without registrationStatus field
   const kurators = await User.find({
     role: "kurator",
     registrationStatus: { $ne: "pending" }
   })
-    .select("_id fullName phone telegramId isActive createdAt registrationStatus")
+    .select("_id fullName phone telegramId isActive createdAt registrationStatus filials")
     .sort({ createdAt: -1 })
     .lean();
 
   return ok(res, kurators, "Kurators list");
+});
+
+// ── PATCH /api/support/kurators/:id/filials  ───────────────────────────────
+// Update kurator filials list
+const updateKuratorFilials = asyncHandler(async (req, res) => {
+  const kurator = await User.findOne({ _id: req.params.id, role: "kurator" });
+  if (!kurator) throw new ApiError(404, "Kurator topilmadi");
+
+  const { filials } = req.body;
+  if (!Array.isArray(filials)) throw new ApiError(400, "filials array bo'lishi kerak");
+
+  kurator.filials = filials.map(f => String(f).trim()).filter(Boolean);
+  await kurator.save();
+
+  return ok(res, { _id: kurator._id, filials: kurator.filials }, "Filiallar yangilandi");
 });
 
 // ── PATCH /api/support/kurators/:id/toggle  ────────────────────────────────
@@ -232,5 +247,6 @@ module.exports = {
   getAllKuratorsAnalytics,
   listKurators,
   toggleKuratorStatus,
+  updateKuratorFilials,
   deleteKurator,
 };

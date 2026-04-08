@@ -52,6 +52,11 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true
     },
+    // Branches the kurator belongs to (can work in multiple filials)
+    filials: {
+      type: [String],
+      default: []
+    },
     // For workers (mentor/ta/mentor_ta): links to their kurator's User._id
     // null for kurator accounts themselves
     kuratorId: {
