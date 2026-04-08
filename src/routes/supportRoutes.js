@@ -10,6 +10,7 @@ const {
   toggleKuratorStatus,
   updateKuratorFilials,
   deleteKurator,
+  broadcast,
 } = require("../controllers/supportController");
 
 const router = express.Router();
@@ -21,6 +22,8 @@ router.get("/requests", listRequests);
 router.post("/requests/:id/approve", approveRequest);
 router.post("/requests/:id/reject", rejectRequest);
 router.get("/analytics", getAllKuratorsAnalytics);
+
+router.post("/broadcast", broadcast);
 
 router.get("/kurators", listKurators);
 router.patch("/kurators/:id/toggle", toggleKuratorStatus);

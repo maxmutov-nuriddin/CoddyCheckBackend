@@ -240,6 +240,48 @@ const deleteKurator = asyncHandler(async (req, res) => {
   return ok(res, null, "Kurator va barcha ma'lumotlari o'chirildi");
 });
 
+// ── POST /api/support/broadcast  ───────────────────────────────────────────
+// Barcha foydalanuvchilarga (kurator + workers) Telegram xabar yuborish
+const broadcast = asyncHandler(async (req, res) => {
+  const { message, password } = req.body;
+
+  if (!message || !String(message).trim()) {
+    throw new ApiError(400, "Xabar matni kiritilmagan");
+  }
+  if (!password) {
+    throw new ApiError(400, "Parolni kiriting");
+  }
+
+  // Parolni tekshirish
+  const support = await User.findById(req.user._id).select("+password");
+  if (!support) throw new ApiError(404, "Foydalanuvchi topilmadi");
+  const isValid = await support.comparePassword(String(password));
+  if (!isValid) throw new ApiError(401, "Parol noto'g'ri");
+
+  // Barcha faol foydalanuvchilar (kurator + worker)lar telegramId si bor bo'lsa
+  const users = await User.find({
+    isActive: true,
+    telegramId: { $ne: null, $exists: true },
+    role: { $in: ["kurator", "mentor", "ta", "mentor_ta"] }
+  }).select("telegramId fullName").lean();
+
+  const text = `📢 *Support xabari*\n\n${String(message).trim()}`;
+
+  let sent = 0;
+  let failed = 0;
+
+  for (const u of users) {
+    try {
+      await sendTelegramMsg(u.telegramId, text);
+      sent++;
+    } catch {
+      failed++;
+    }
+  }
+
+  return ok(res, { total: users.length, sent, failed }, "Xabar yuborildi");
+});
+
 module.exports = {
   listRequests,
   approveRequest,
@@ -249,4 +291,5 @@ module.exports = {
   toggleKuratorStatus,
   updateKuratorFilials,
   deleteKurator,
+  broadcast,
 };
