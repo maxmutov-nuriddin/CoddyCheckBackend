@@ -160,7 +160,8 @@ const getMe = asyncHandler(async (req, res) => {
     role: user.role,
     phone: user.phone,
     telegramId: user.telegramId,
-    registrationStatus: user.registrationStatus
+    registrationStatus: user.registrationStatus,
+    filials: user.filials || []
   });
 });
 
