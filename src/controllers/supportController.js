@@ -102,8 +102,12 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
     kurators.map(async (k) => {
       const kuratorId = k._id;
 
-      const [totalStudents, totalGroups, totalWorkers, monthlyAtt, monthlyCalledAgg] = await Promise.all([
-        Student.countDocuments({ kuratorId, isActive: true }),
+      const FROZEN_STATUSES = ["frozen", "muzlatilgan", "qarzdor", "qaytadi"];
+
+      const [activeStudents, leadStudents, allStudents, totalGroups, totalWorkers, monthlyAtt, monthlyCalledAgg] = await Promise.all([
+        Student.countDocuments({ kuratorId, isActive: true, frozenStatus: { $nin: [...FROZEN_STATUSES, "lead"] } }),
+        Student.countDocuments({ kuratorId, isActive: true, frozenStatus: "lead" }),
+        Student.countDocuments({ kuratorId }),
         Group.countDocuments({ kuratorId }),
         User.countDocuments({ kuratorId, role: { $in: ["mentor", "ta", "mentor_ta"] }, isActive: true }),
         Attendance.aggregate([
@@ -125,6 +129,7 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
 
       const att = monthlyAtt[0] || { called: 0, came: 0, notCame: 0 };
       const calledCount = monthlyCalledAgg[0]?.totalCalled || 0;
+      const inactiveStudents = allStudents - activeStudents - leadStudents; // frozen + isActive:false
 
       return {
         _id: k._id,
@@ -133,7 +138,10 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
         telegramId: k.telegramId,
         registeredAt: k.createdAt,
         stats: {
-          totalStudents,
+          activeStudents,
+          leadStudents,
+          inactiveStudents,
+          allStudents,
           totalGroups,
           totalWorkers,
           thisMonth: {
