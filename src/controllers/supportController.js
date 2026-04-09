@@ -107,12 +107,23 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
     CoddyAttendance.aggregate([
       {
         $match: {
-          date: { $gte: monthStartStr, $lte: monthEndStr }
+          date: { $gte: monthStartStr, $lte: monthEndStr },
+          studentGroup: { $nin: ["-", "–", "—", "", " "] }
         }
       },
       {
         $group: {
-          _id: { $toLower: "$studentGroup" },
+          _id: {
+            $replaceAll: {
+              input: {
+                $replaceAll: {
+                  input: { $toLower: "$studentGroup" },
+                  find: "-", replacement: ""
+                }
+              },
+              find: " ", replacement: ""
+            }
+          },
           total: {
             $sum: { $cond: [{ $eq: ["$requestType", "mark"] }, 1, 0] }
           },
@@ -154,10 +165,11 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
     ])
   ]);
 
-  // Map lowercased group name → kuratorId string
+  // Map normalized group name → kuratorId string
+  const normalizeGroupName = (name) => name.toLowerCase().replace(/[-\s]/g, "");
   const groupToKurator = new Map();
   for (const g of allGroups) {
-    if (g.kuratorId) groupToKurator.set(g.name.toLowerCase(), g.kuratorId.toString());
+    if (g.kuratorId) groupToKurator.set(normalizeGroupName(g.name), g.kuratorId.toString());
   }
 
   // Aggregate attendance per kuratorId
