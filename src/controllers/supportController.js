@@ -6,6 +6,7 @@ const CalledStudent = require("../models/CalledStudent");
 const FrozenStudent = require("../models/FrozenStudent");
 const TaNotificationTask = require("../models/TaNotificationTask");
 const AttendanceStatusLog = require("../models/AttendanceStatusLog");
+const CoddyAttendance = require("../coddyCheck/models/CoddyAttendance");
 const ApiError = require("../utils/ApiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { ok } = require("../utils/response");
@@ -93,43 +94,118 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
     .lean();
 
   const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  monthStart.setHours(0, 0, 0, 0);
-  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  monthEnd.setHours(23, 59, 59, 999);
 
-  const stats = await Promise.all(
+  // CoddyAttendance uses string dates "YYYY-MM-DD"
+  const pad = (n) => String(n).padStart(2, "0");
+  const monthStartStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const monthEndStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(lastDay)}`;
+
+  // Load all groups (to map groupName → kuratorId) and CoddyAttendance in parallel
+  const [allGroups, coddyByGroup] = await Promise.all([
+    Group.find({}).select("name kuratorId").lean(),
+    CoddyAttendance.aggregate([
+      {
+        $match: {
+          date: { $gte: monthStartStr, $lte: monthEndStr }
+        }
+      },
+      {
+        $group: {
+          _id: { $toLower: "$studentGroup" },
+          total: {
+            $sum: { $cond: [{ $eq: ["$requestType", "mark"] }, 1, 0] }
+          },
+          called: {
+            $sum: { $cond: [{ $in: ["$requestType", ["call_extra", "keep"]] }, 1, 0] }
+          },
+          came: {
+            $sum: {
+              $cond: {
+                if: { $and: [
+                  { $in: ["$requestType", ["call_extra", "keep"]] },
+                  { $eq: ["$status", "Keldi"] }
+                ]},
+                then: 1, else: 0
+              }
+            }
+          },
+          notCame: {
+            $sum: {
+              $cond: {
+                if: { $and: [
+                  { $in: ["$requestType", ["call_extra", "keep"]] },
+                  { $eq: ["$status", "Kelmadi"] }
+                ]},
+                then: 1, else: 0
+              }
+            }
+          }
+        }
+      }
+    ])
+  ]);
+
+  // Map lowercased group name → kuratorId string
+  const groupToKurator = new Map();
+  for (const g of allGroups) {
+    if (g.kuratorId) groupToKurator.set(g.name.toLowerCase(), g.kuratorId.toString());
+  }
+
+  // Aggregate attendance per kuratorId
+  const kuratorAttMap = new Map();
+  let globalCame = 0, globalNotCame = 0, globalTotal = 0, globalCalled = 0;
+  const unmatchedAtt = { came: 0, notCame: 0, total: 0, called: 0 };
+
+  for (const row of coddyByGroup) {
+    globalCame += row.came;
+    globalNotCame += row.notCame;
+    globalTotal += row.total;
+    globalCalled += row.called;
+    const kid = groupToKurator.get(row._id);
+    if (!kid) {
+      unmatchedAtt.came += row.came;
+      unmatchedAtt.notCame += row.notCame;
+      unmatchedAtt.total += row.total;
+      unmatchedAtt.called += row.called;
+      continue;
+    }
+    const prev = kuratorAttMap.get(kid) || { came: 0, notCame: 0, total: 0, called: 0 };
+    prev.came += row.came;
+    prev.notCame += row.notCame;
+    prev.total += row.total;
+    prev.called += row.called;
+    kuratorAttMap.set(kid, prev);
+  }
+
+  // If only 1 kurator, assign unmatched (groups not yet in DB) to them
+  if (kurators.length === 1 && (unmatchedAtt.total > 0 || unmatchedAtt.called > 0)) {
+    const kid = kurators[0]._id.toString();
+    const prev = kuratorAttMap.get(kid) || { came: 0, notCame: 0, total: 0, called: 0 };
+    prev.came += unmatchedAtt.came;
+    prev.notCame += unmatchedAtt.notCame;
+    prev.total += unmatchedAtt.total;
+    prev.called += unmatchedAtt.called;
+    kuratorAttMap.set(kid, prev);
+  }
+
+  const FROZEN_STATUSES = ["frozen", "muzlatilgan", "qarzdor", "qaytadi"];
+
+  const kuratorsStats = await Promise.all(
     kurators.map(async (k) => {
       const kuratorId = k._id;
 
-      const FROZEN_STATUSES = ["frozen", "muzlatilgan", "qarzdor", "qaytadi"];
-
-      const [activeStudents, leadStudents, allStudents, totalGroups, totalWorkers, monthlyAtt, monthlyCalledAgg] = await Promise.all([
+      const [activeStudents, leadStudents, allStudents, totalGroups, totalWorkers] = await Promise.all([
         Student.countDocuments({ kuratorId, isActive: true, frozenStatus: { $nin: [...FROZEN_STATUSES, "lead"] } }),
         Student.countDocuments({ kuratorId, isActive: true, frozenStatus: "lead" }),
         Student.countDocuments({ kuratorId }),
         Group.countDocuments({ kuratorId }),
         User.countDocuments({ kuratorId, role: { $in: ["mentor", "ta", "mentor_ta"] }, isActive: true }),
-        Attendance.aggregate([
-          { $match: { kuratorId, date: { $gte: monthStart, $lte: monthEnd } } },
-          {
-            $group: {
-              _id: null,
-              called: { $sum: { $cond: [{ $eq: ["$callStatus", "chaqirilgan"] }, 1, 0] } },
-              came: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "keldi"] }, 1, 0] } },
-              notCame: { $sum: { $cond: [{ $eq: ["$attendanceStatus", "kelmadi"] }, 1, 0] } }
-            }
-          }
-        ]),
-        CalledStudent.aggregate([
-          { $match: { kuratorId, date: { $gte: monthStart, $lte: monthEnd } } },
-          { $group: { _id: null, totalCalled: { $sum: 1 } } }
-        ])
       ]);
 
-      const att = monthlyAtt[0] || { called: 0, came: 0, notCame: 0 };
-      const calledCount = monthlyCalledAgg[0]?.totalCalled || 0;
-      const inactiveStudents = allStudents - activeStudents - leadStudents; // frozen + isActive:false
+      const att = kuratorAttMap.get(kuratorId.toString()) || { came: 0, notCame: 0, total: 0, called: 0 };
+      const resolved = att.came + att.notCame;
+      const attendanceRate = resolved > 0 ? Math.round((att.came / resolved) * 100) : 0;
 
       return {
         _id: k._id,
@@ -141,23 +217,34 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
         stats: {
           activeStudents,
           leadStudents,
-          inactiveStudents,
+          inactiveStudents: allStudents - activeStudents - leadStudents,
           allStudents,
           totalGroups,
           totalWorkers,
           thisMonth: {
-            calledStudents: calledCount,
-            attendanceCalled: att.called,
+            total: att.total,
+            called: att.called,
             came: att.came,
             notCame: att.notCame,
-            attendanceRate: att.called > 0 ? Math.round((att.came / att.called) * 100) : 0
+            attendanceRate,
           }
         }
       };
     })
   );
 
-  return ok(res, stats, "All kurators analytics");
+  const globalResolved = globalCame + globalNotCame;
+  const globalRate = globalResolved > 0 ? Math.round((globalCame / globalResolved) * 100) : 0;
+
+  return ok(res, {
+    kurators: kuratorsStats,
+    monthStats: {
+      totalCame: globalCame,
+      totalNotCame: globalNotCame,
+      total: globalTotal,
+      attendanceRate: globalRate,
+    }
+  }, "All kurators analytics");
 });
 
 // ── GET /api/support/kurators  ─────────────────────────────────────────────
