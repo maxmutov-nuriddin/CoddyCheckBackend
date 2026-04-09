@@ -117,7 +117,15 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
             $sum: { $cond: [{ $eq: ["$requestType", "mark"] }, 1, 0] }
           },
           called: {
-            $sum: { $cond: [{ $in: ["$requestType", ["call_extra", "keep"]] }, 1, 0] }
+            $sum: {
+              $cond: {
+                if: { $and: [
+                  { $in: ["$requestType", ["call_extra", "keep"]] },
+                  { $eq: ["$status", "Kutilmoqda"] }
+                ]},
+                then: 1, else: 0
+              }
+            }
           },
           came: {
             $sum: {
