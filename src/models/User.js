@@ -64,6 +64,11 @@ const userSchema = new mongoose.Schema(
       ref: "User",
       default: null,
       index: true
+    },
+    // Guruhlar sahifasidagi comment select shablonlari
+    commentPresets: {
+      type: [String],
+      default: []
     }
   },
   { timestamps: true }

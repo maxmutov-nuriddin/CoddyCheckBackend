@@ -319,6 +319,26 @@ const resetPassword = asyncHandler(async (req, res) => {
   return ok(res, null, "Parol muvaffaqiyatli yangilandi");
 });
 
+const getCommentPresets = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id).lean();
+  return ok(res, { presets: user.commentPresets || [] });
+});
+
+const updateCommentPresets = asyncHandler(async (req, res) => {
+  const { presets } = req.body;
+  if (!Array.isArray(presets)) {
+    throw new ApiError(400, "presets array bo'lishi kerak");
+  }
+
+  const cleaned = presets
+    .map((p) => String(p || "").trim())
+    .filter(Boolean)
+    .slice(0, 200);
+
+  await User.findByIdAndUpdate(req.user._id, { commentPresets: cleaned });
+  return ok(res, { presets: cleaned }, "Shablonlar saqlandi");
+});
+
 module.exports = {
   register,
   login,
@@ -327,5 +347,7 @@ module.exports = {
   changePassword,
   deleteAccount,
   forgotPassword,
-  resetPassword
+  resetPassword,
+  getCommentPresets,
+  updateCommentPresets
 };

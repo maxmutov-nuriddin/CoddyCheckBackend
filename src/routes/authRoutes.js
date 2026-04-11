@@ -1,5 +1,5 @@
 ﻿const express = require("express");
-const { login, register, getMe, updateProfile, changePassword, deleteAccount, forgotPassword, resetPassword } = require("../controllers/authController");
+const { login, register, getMe, updateProfile, changePassword, deleteAccount, forgotPassword, resetPassword, getCommentPresets, updateCommentPresets } = require("../controllers/authController");
 const authMiddleware = require("../middlewares/authMiddleware");
 
 const router = express.Router();
@@ -13,5 +13,8 @@ router.get("/me", authMiddleware, getMe);
 router.patch("/profile", authMiddleware, updateProfile);
 router.patch("/password", authMiddleware, changePassword);
 router.delete("/account", authMiddleware, deleteAccount);
+
+router.get("/comment-presets", authMiddleware, getCommentPresets);
+router.put("/comment-presets", authMiddleware, updateCommentPresets);
 
 module.exports = router;
