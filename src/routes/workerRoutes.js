@@ -6,7 +6,8 @@ const {
   createWorker,
   updateWorker,
   deleteWorker,
-  notifyWorker
+  notifyWorker,
+  resetWorkerPassword
 } = require("../controllers/workerController");
 
 const router = express.Router();
@@ -19,5 +20,6 @@ router.post("/", createWorker);
 router.patch("/:id", updateWorker);
 router.delete("/:id", deleteWorker);
 router.post("/:id/notify", notifyWorker);
+router.post("/:id/reset-password", resetWorkerPassword);
 
 module.exports = router;

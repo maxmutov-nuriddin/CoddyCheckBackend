@@ -114,7 +114,15 @@ const login = asyncHandler(async (req, res) => {
     throw new ApiError(400, "phone and password are required");
   }
 
-  const user = await User.findOne({ phone, role: { $in: ["kurator", "support"] } }).select("+password");
+  // DB'da +998... yoki 998... formatida saqlangan bo'lishi mumkin — ikkalasini ham qidiramiz
+  const phoneVariants = phone.startsWith("+")
+    ? [phone, phone.slice(1)]
+    : [phone, `+${phone}`];
+
+  const user = await User.findOne({
+    phone: { $in: phoneVariants },
+    role: { $in: ["kurator", "support", "mentor", "mentor_ta"] }
+  }).select("+password");
   if (!user) {
     throw new ApiError(401, "Telefon raqam yoki parol noto'g'ri");
   }
@@ -129,7 +137,7 @@ const login = asyncHandler(async (req, res) => {
     throw new ApiError(403, "So'rovingiz hali ko'rib chiqilmagan. Support tasdiqlashini kuting.");
   }
 
-  if (!user.isActive && user.role !== "kurator") {
+  if (!user.isActive) {
     throw new ApiError(403, "Foydalanuvchi faol emas");
   }
 
@@ -145,7 +153,8 @@ const login = asyncHandler(async (req, res) => {
         role: user.role,
         phone: user.phone,
         telegramId: user.telegramId,
-        registrationStatus: user.registrationStatus
+        registrationStatus: user.registrationStatus,
+        kuratorId: user.kuratorId
       }
     },
     "Logged in"
@@ -258,7 +267,8 @@ const forgotPassword = asyncHandler(async (req, res) => {
   const phone = normalizePhone(req.body);
   if (!phone) throw new ApiError(400, "Telefon raqamini kiriting");
 
-  const kurator = await User.findOne({ phone, role: "kurator", isActive: true });
+  const phoneVariants = phone.startsWith("+") ? [phone, phone.slice(1)] : [phone, `+${phone}`];
+  const kurator = await User.findOne({ phone: { $in: phoneVariants }, role: "kurator", isActive: true });
   if (!kurator) throw new ApiError(404, "Bu telefon raqam bilan kurator topilmadi");
 
   const telegramId = kurator.telegramId;
@@ -294,14 +304,18 @@ const resetPassword = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Yangi parol kamida 4 ta belgidan iborat bo'lishi kerak");
   }
 
-  const store = _resetStore.get(phone);
+  // OTP store key: forgotPassword'da saqlangan phone bilan mos kelishi kerak
+  const phoneVariants = phone.startsWith("+") ? [phone, phone.slice(1)] : [phone, `+${phone}`];
+  const storeKey = phoneVariants.find((v) => _resetStore.has(v));
+  const store = storeKey ? _resetStore.get(storeKey) : null;
+
   if (!store) throw new ApiError(400, "Avval kod yuborish so'rovini qiling");
   if (Date.now() > store.expiresAt) {
-    _resetStore.delete(phone);
+    _resetStore.delete(storeKey);
     throw new ApiError(400, "Kod muddati tugagan. Qaytadan urinib ko'ring");
   }
   if (store.attempts >= 5) {
-    _resetStore.delete(phone);
+    _resetStore.delete(storeKey);
     throw new ApiError(400, "Juda ko'p noto'g'ri urinish. Qaytadan kod so'rang.");
   }
   if (code !== store.code) {
@@ -309,13 +323,13 @@ const resetPassword = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Kod noto'g'ri");
   }
 
-  const kurator = await User.findOne({ phone, role: "kurator", isActive: true }).select("+password");
+  const kurator = await User.findOne({ phone: { $in: phoneVariants }, role: "kurator", isActive: true }).select("+password");
   if (!kurator) throw new ApiError(404, "Kurator topilmadi");
 
   kurator.password = newPassword;
   await kurator.save();
 
-  _resetStore.delete(phone);
+  _resetStore.delete(storeKey);
   return ok(res, null, "Parol muvaffaqiyatli yangilandi");
 });
 

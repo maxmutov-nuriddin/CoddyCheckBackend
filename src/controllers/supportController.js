@@ -347,6 +347,46 @@ const deleteKurator = asyncHandler(async (req, res) => {
   return ok(res, null, "Kurator va barcha ma'lumotlari o'chirildi");
 });
 
+// ── GET /api/support/mentors  ──────────────────────────────────────────────
+// All mentors with kurator + filial info
+const listMentors = asyncHandler(async (req, res) => {
+  const mentors = await User.find({ role: { $in: ["mentor", "mentor_ta"] } })
+    .select("_id fullName phone role isActive createdAt kuratorId")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const kuratorIds = [...new Set(mentors.filter(m => m.kuratorId).map(m => String(m.kuratorId)))];
+  const kurators = await User.find({ _id: { $in: kuratorIds } })
+    .select("_id fullName filials")
+    .lean();
+  const kuratorMap = Object.fromEntries(kurators.map(k => [String(k._id), k]));
+
+  const result = mentors.map(m => ({
+    _id: m._id,
+    fullName: m.fullName,
+    phone: m.phone || "",
+    role: m.role,
+    isActive: m.isActive,
+    createdAt: m.createdAt,
+    kuratorId: m.kuratorId,
+    kuratorName: kuratorMap[String(m.kuratorId)]?.fullName || "—",
+    filials: kuratorMap[String(m.kuratorId)]?.filials || [],
+  }));
+
+  return ok(res, result, "Mentors list");
+});
+
+// ── POST /api/support/mentors/:id/reset-password  ─────────────────────────
+const resetMentorPassword = asyncHandler(async (req, res) => {
+  const mentor = await User.findOne({ _id: req.params.id, role: { $in: ["mentor", "mentor_ta"] } });
+  if (!mentor) throw new ApiError(404, "Mentor topilmadi");
+
+  mentor.password = "1234";
+  await mentor.save();
+
+  return ok(res, { _id: mentor._id, fullName: mentor.fullName }, "Parol 1234 ga tiklandi");
+});
+
 // ── POST /api/support/broadcast  ───────────────────────────────────────────
 // Barcha foydalanuvchilarga (kurator + workers) Telegram xabar yuborish
 const broadcast = asyncHandler(async (req, res) => {
@@ -399,4 +439,6 @@ module.exports = {
   updateKuratorFilials,
   deleteKurator,
   broadcast,
+  listMentors,
+  resetMentorPassword,
 };

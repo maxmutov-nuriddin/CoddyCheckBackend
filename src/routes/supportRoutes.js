@@ -11,6 +11,8 @@ const {
   updateKuratorFilials,
   deleteKurator,
   broadcast,
+  listMentors,
+  resetMentorPassword,
 } = require("../controllers/supportController");
 
 const router = express.Router();
@@ -29,5 +31,8 @@ router.get("/kurators", listKurators);
 router.patch("/kurators/:id/toggle", toggleKuratorStatus);
 router.patch("/kurators/:id/filials", updateKuratorFilials);
 router.delete("/kurators/:id", deleteKurator);
+
+router.get("/mentors", listMentors);
+router.post("/mentors/:id/reset-password", resetMentorPassword);
 
 module.exports = router;

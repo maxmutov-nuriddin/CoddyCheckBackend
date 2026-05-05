@@ -12,6 +12,7 @@ const activityRoutes = require("./routes/activityRoutes");
 const botRoutes = require("./routes/botRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
 const supportRoutes = require("./routes/supportRoutes");
+const mentorRoutes = require("./routes/mentorRoutes");
 const { handleCoddyWebhook, getCoddyBotStatus } = require("./coddyCheck/bot");
 const { errorHandler, notFoundHandler } = require("./middlewares/errorHandler");
 
@@ -85,6 +86,7 @@ app.use("/api/activity", activityRoutes);
 app.use("/api/bot", botRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/support", supportRoutes);
+app.use("/api/mentor", mentorRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

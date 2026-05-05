@@ -20,6 +20,15 @@ function normalizeTelegramId(value) {
   return digits || raw;
 }
 
+function normalizePhone(value) {
+  const raw = normalizeText(value);
+  if (!raw) return "";
+  const hasPlus = raw.startsWith("+");
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return "";
+  return hasPlus ? `+${digits}` : digits;
+}
+
 function sanitizeWorkerColor(value, fallback = DEFAULT_WORKER_COLOR) {
   const raw = normalizeText(value);
   if (!raw) return fallback;
@@ -42,6 +51,7 @@ function toWorkerDto(user) {
     _id: user._id,
     fullName: user.fullName,
     role: user.role,
+    phone: user.phone || "",
     telegramId: user.telegramId || "",
     color: sanitizeWorkerColor(user.color),
     isActive: Boolean(user.isActive),
@@ -111,33 +121,54 @@ const listWorkers = asyncHandler(async (req, res) => {
   );
 });
 
+const MENTOR_ROLES = ["mentor", "mentor_ta"];
+
 const createWorker = asyncHandler(async (req, res) => {
   const fullName = normalizeText(req.body.fullName);
-  const telegramId = normalizeTelegramId(req.body.telegramId);
+  const telegramId = normalizeTelegramId(req.body.telegramId || "");
+  const phone = normalizePhone(req.body.phone || "");
   const role = normalizeText(req.body.role).toLowerCase();
   const color = parseWorkerColor(req.body.color, DEFAULT_WORKER_COLOR);
   const kuratorId = req.user._id;
 
-  if (!fullName || !telegramId || !STAFF_ROLES.includes(role)) {
-    throw new ApiError(400, "fullName, telegramId va role (mentor/ta/mentor_ta) majburiy");
+  if (!fullName || !STAFF_ROLES.includes(role)) {
+    throw new ApiError(400, "fullName va role (mentor/ta/mentor_ta) majburiy");
   }
 
-  const byTelegram = await User.findOne({ telegramId });
-  if (byTelegram) {
-    throw new ApiError(409, "Bu Telegram ID allaqachon mavjud");
+  // Mentor va mentor_ta uchun telefon raqam majburiy (login uchun)
+  if (MENTOR_ROLES.includes(role) && !phone) {
+    throw new ApiError(400, "Mentor uchun telefon raqam kiritish majburiy");
   }
 
-  const tempPassword = require("crypto").randomBytes(12).toString("base64url");
+  if (telegramId) {
+    const byTelegram = await User.findOne({ telegramId });
+    if (byTelegram) {
+      throw new ApiError(409, "Bu Telegram ID allaqachon mavjud");
+    }
+  }
 
-  const user = await User.create({
+  if (phone) {
+    const byPhone = await User.findOne({ phone });
+    if (byPhone) {
+      throw new ApiError(409, "Bu telefon raqam allaqachon mavjud");
+    }
+  }
+
+  // Mentor/mentor_ta uchun default parol 1234
+  const password = MENTOR_ROLES.includes(role) ? "1234" : require("crypto").randomBytes(12).toString("base64url");
+
+  const userData = {
     fullName,
     role,
-    telegramId,
     color,
-    password: tempPassword,
+    password,
     isActive: true,
     kuratorId
-  });
+  };
+  if (telegramId) userData.telegramId = telegramId;
+  if (phone) userData.phone = phone;
+
+  const user = await User.create(userData);
 
   return created(res, toWorkerDto(user), "Ishchi qo'shildi");
 });
@@ -152,6 +183,8 @@ const updateWorker = asyncHandler(async (req, res) => {
   const fullName = req.body.fullName !== undefined ? normalizeText(req.body.fullName) : worker.fullName;
   const telegramId =
     req.body.telegramId !== undefined ? normalizeTelegramId(req.body.telegramId) : normalizeTelegramId(worker.telegramId);
+  const phone =
+    req.body.phone !== undefined ? normalizePhone(req.body.phone) : normalizePhone(worker.phone);
   const role = req.body.role !== undefined ? normalizeText(req.body.role).toLowerCase() : worker.role;
   const isActive = req.body.isActive !== undefined ? Boolean(req.body.isActive) : worker.isActive;
   const color =
@@ -159,17 +192,31 @@ const updateWorker = asyncHandler(async (req, res) => {
       ? parseWorkerColor(req.body.color, sanitizeWorkerColor(worker.color))
       : sanitizeWorkerColor(worker.color);
 
-  if (!fullName || !telegramId || !STAFF_ROLES.includes(role)) {
-    throw new ApiError(400, "fullName, telegramId va role (mentor/ta/mentor_ta) majburiy");
+  if (!fullName || !STAFF_ROLES.includes(role)) {
+    throw new ApiError(400, "fullName va role (mentor/ta/mentor_ta) majburiy");
   }
 
-  const byTelegram = await User.findOne({ telegramId, _id: { $ne: worker._id } });
-  if (byTelegram) {
-    throw new ApiError(409, "Bu Telegram ID boshqa userga biriktirilgan");
+  if (MENTOR_ROLES.includes(role) && !phone) {
+    throw new ApiError(400, "Mentor uchun telefon raqam kiritish majburiy");
+  }
+
+  if (telegramId) {
+    const byTelegram = await User.findOne({ telegramId, _id: { $ne: worker._id } });
+    if (byTelegram) {
+      throw new ApiError(409, "Bu Telegram ID boshqa userga biriktirilgan");
+    }
+  }
+
+  if (phone) {
+    const byPhone = await User.findOne({ phone, _id: { $ne: worker._id } });
+    if (byPhone) {
+      throw new ApiError(409, "Bu telefon raqam boshqa userga biriktirilgan");
+    }
   }
 
   worker.fullName = fullName;
-  worker.telegramId = telegramId;
+  worker.telegramId = telegramId || null;
+  worker.phone = phone || null;
   worker.role = role;
   worker.color = color;
   worker.isActive = isActive;
@@ -189,6 +236,19 @@ const deleteWorker = asyncHandler(async (req, res) => {
   await User.findByIdAndDelete(req.params.id);
 
   return ok(res, null, "Ishchi o'chirildi");
+});
+
+const resetWorkerPassword = asyncHandler(async (req, res) => {
+  const kuratorId = req.user._id;
+  const worker = await User.findOne({ _id: req.params.id, kuratorId, role: { $in: MENTOR_ROLES } });
+  if (!worker) {
+    throw new ApiError(404, "Mentor topilmadi yoki sizga tegishli emas");
+  }
+
+  worker.password = "1234";
+  await worker.save();
+
+  return ok(res, { fullName: worker.fullName }, "Parol '1234' ga tiklandi");
 });
 
 const notifyWorker = asyncHandler(async (req, res) => {
@@ -230,5 +290,6 @@ module.exports = {
   createWorker,
   updateWorker,
   deleteWorker,
-  notifyWorker
+  notifyWorker,
+  resetWorkerPassword
 };
