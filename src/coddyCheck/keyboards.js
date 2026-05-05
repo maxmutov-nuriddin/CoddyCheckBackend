@@ -19,6 +19,11 @@ const teacherMainKeyboard = mentorMainKeyboard;
 
 const adminMainKeyboard = [["📊 Hisobot", "🔍 Qidiruv"]];
 
+const supportMainKeyboard = [
+  ["👥 Mentorlar", "📊 Statistika"],
+  ["ℹ️ Yordam"]
+];
+
 function getWorkerMainKeyboard(role) {
   const normalizedRole = String(role || "").toLowerCase();
 
@@ -42,6 +47,7 @@ module.exports = {
   taMainKeyboard,
   teacherMainKeyboard,
   adminMainKeyboard,
+  supportMainKeyboard,
   getWorkerMainKeyboard
 };
 
