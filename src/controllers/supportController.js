@@ -379,6 +379,14 @@ const listMentors = asyncHandler(async (req, res) => {
 
 // ── POST /api/support/mentors/:id/reset-password  ─────────────────────────
 const resetMentorPassword = asyncHandler(async (req, res) => {
+  const { password } = req.body;
+  if (!password) throw new ApiError(400, "Support parolini kiriting");
+
+  const support = await User.findById(req.user._id).select("+password");
+  if (!support) throw new ApiError(404, "Support topilmadi");
+  const isValid = await support.comparePassword(String(password));
+  if (!isValid) throw new ApiError(401, "Parol noto'g'ri");
+
   const mentor = await User.findOne({ _id: req.params.id, role: { $in: ["mentor", "mentor_ta"] } });
   if (!mentor) throw new ApiError(404, "Mentor topilmadi");
 
