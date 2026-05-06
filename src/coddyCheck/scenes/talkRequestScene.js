@@ -148,11 +148,8 @@ const talkRequestScene = new WizardScene(
     }
 
     if (!groups.length) {
-      ctx.wizard.state.flow = "manual";
-      await ctx.reply("O'quvchi ism familiyasini kiriting:", cancelKeyboard);
-      ctx.wizard.next(); // 0->1
-      ctx.wizard.next(); // 1->2
-      return;
+      await ctx.reply("Sizda hali guruh mavjud emas.", mainKeyboard(ctx));
+      return ctx.scene.leave();
     }
 
     ctx.wizard.state.groups = groups;
