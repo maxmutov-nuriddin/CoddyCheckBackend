@@ -219,7 +219,7 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
       const [activeStudents, leadStudents, allStudents, totalGroups, totalWorkers] = await Promise.all([
         Student.countDocuments({ kuratorId, isActive: true, frozenStatus: { $nin: [...FROZEN_STATUSES, "lead"] } }),
         Student.countDocuments({ kuratorId, isActive: true, frozenStatus: "lead" }),
-        Student.countDocuments({ kuratorId }),
+        Student.countDocuments({ kuratorId, isActive: true }),
         Group.countDocuments({ kuratorId }),
         User.countDocuments({ kuratorId, role: { $in: ["mentor", "ta", "mentor_ta"] }, isActive: true }),
       ]);
