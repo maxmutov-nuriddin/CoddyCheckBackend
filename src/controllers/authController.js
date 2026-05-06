@@ -268,8 +268,8 @@ const forgotPassword = asyncHandler(async (req, res) => {
   if (!phone) throw new ApiError(400, "Telefon raqamini kiriting");
 
   const phoneVariants = phone.startsWith("+") ? [phone, phone.slice(1)] : [phone, `+${phone}`];
-  const kurator = await User.findOne({ phone: { $in: phoneVariants }, role: "kurator", isActive: true });
-  if (!kurator) throw new ApiError(404, "Bu telefon raqam bilan kurator topilmadi");
+  const kurator = await User.findOne({ phone: { $in: phoneVariants }, isActive: true });
+  if (!kurator) throw new ApiError(404, "Bu telefon raqam bilan foydalanuvchi topilmadi");
 
   const telegramId = kurator.telegramId;
   if (!telegramId) {
@@ -280,7 +280,7 @@ const forgotPassword = asyncHandler(async (req, res) => {
   const bot = getBotInstance();
   if (!bot) throw new ApiError(503, "Telegram bot hozirda ishlamayapti");
 
-  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const code = String(Math.floor(10000 + Math.random() * 90000)); // 5 xonali
   const expiresAt = Date.now() + 10 * 60 * 1000; // 10 daqiqa
 
   await bot.telegram.sendMessage(
@@ -323,8 +323,8 @@ const resetPassword = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Kod noto'g'ri");
   }
 
-  const kurator = await User.findOne({ phone: { $in: phoneVariants }, role: "kurator", isActive: true }).select("+password");
-  if (!kurator) throw new ApiError(404, "Kurator topilmadi");
+  const kurator = await User.findOne({ phone: { $in: phoneVariants }, isActive: true }).select("+password");
+  if (!kurator) throw new ApiError(404, "Foydalanuvchi topilmadi");
 
   kurator.password = newPassword;
   await kurator.save();
