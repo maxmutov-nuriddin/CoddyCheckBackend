@@ -174,6 +174,9 @@ async function startCoddyCheckBot() {
       return ctx.reply("🔒 Bot bloklangan. Support parolini kiriting:");
     }
 
+    // Parol xabarini chatdan o'chirish (xavfsizlik)
+    try { await ctx.deleteMessage(); } catch (_) {}
+
     // Parolni tekshirish
     const support = await User.findById(ctx.state.worker._id).select("+password");
     if (!support) return ctx.reply("Foydalanuvchi topilmadi.");
