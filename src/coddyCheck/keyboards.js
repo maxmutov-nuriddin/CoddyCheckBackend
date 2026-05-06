@@ -20,8 +20,8 @@ const teacherMainKeyboard = mentorMainKeyboard;
 const adminMainKeyboard = [["📊 Hisobot", "🔍 Qidiruv"]];
 
 const supportMainKeyboard = [
-  ["👥 Mentorlar", "📊 Statistika"],
-  ["ℹ️ Yordam"]
+  ["🧑‍💼 Kuratorlar", "👥 Mentorlar", "🧑‍🏫 TA lar"],
+  ["📊 Statistika", "ℹ️ Yordam"]
 ];
 
 function getWorkerMainKeyboard(role) {

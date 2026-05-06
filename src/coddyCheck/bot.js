@@ -155,6 +155,56 @@ async function startCoddyCheckBot() {
     }
   });
 
+  // ── Support: blok va parol kutish holati ──────────────────────────────────
+  coddyBot.use(async (ctx, next) => {
+    if (ctx.state.worker?.role !== "support") return next();
+
+    const isLocked = ctx.session?.supportLocked;
+    const awaitingReset = ctx.session?.awaitingResetFor;
+
+    if (!isLocked && !awaitingReset) return next();
+
+    const text = ctx.message?.text?.trim();
+
+    // Matn emas (callback, sticker, va h.k.) — blok xabarini ko'rsat
+    if (!text) {
+      if (ctx.updateType === "callback_query") {
+        await ctx.answerCbQuery("🔒 Bot bloklangan. Avval parolni kiriting.", { show_alert: true });
+      }
+      return ctx.reply("🔒 Bot bloklangan. Support parolini kiriting:");
+    }
+
+    // Parolni tekshirish
+    const support = await User.findById(ctx.state.worker._id).select("+password");
+    if (!support) return ctx.reply("Foydalanuvchi topilmadi.");
+    const valid = await support.comparePassword(text);
+
+    if (isLocked) {
+      if (valid) {
+        ctx.session.supportLocked = false;
+        return ctx.reply("✅ Bot qulfdan chiqdi. Davom eting.", {
+          reply_markup: { keyboard: supportMainKeyboard, resize_keyboard: true }
+        });
+      }
+      return ctx.reply("❌ Parol noto'g'ri. Qayta kiriting:");
+    }
+
+    if (awaitingReset) {
+      if (valid) {
+        const { mentorId, mentorName } = awaitingReset;
+        ctx.session.awaitingResetFor = null;
+        const mentor = await User.findOne({ _id: mentorId, role: { $in: ["mentor", "mentor_ta"] } });
+        if (!mentor) return ctx.reply("❌ Mentor topilmadi.");
+        mentor.password = "1234";
+        await mentor.save();
+        return ctx.reply(`✅ *${mentorName}* paroli *1234* ga tiklandi.`, { parse_mode: "Markdown" });
+      }
+      ctx.session.awaitingResetFor = null;
+      ctx.session.supportLocked = true;
+      return ctx.reply("❌ Parol noto'g'ri.\n\n🔒 Bot bloklandi. Qulfdan chiqarish uchun to'g'ri parolni kiriting:");
+    }
+  });
+
   coddyBot.use(stage.middleware());
 
   coddyBot.catch((err, ctx) => {
@@ -286,74 +336,244 @@ async function startCoddyCheckBot() {
   coddyBot.action(/^coddy_confirm_del_call_(.+)$/, teacherController.confirmDeleteCallRecord);
   coddyBot.action(/^coddy_cancel_del_call_(.+)$/, teacherController.cancelDeleteCallRecord);
 
-  // ── Support: mentorlar ro'yxati ────────────────────────────────────────────
-  coddyBot.hears("👥 Mentorlar", async (ctx) => {
+  // ── Support: kuratorlar ro'yxati ──────────────────────────────────────────
+  coddyBot.hears("🧑‍💼 Kuratorlar", async (ctx) => {
     if (!isSupport(ctx)) return;
+    try {
+      const { Markup } = require("telegraf");
+      const kurators = await User.find({ role: "kurator", isActive: true, registrationStatus: "approved" })
+        .sort({ fullName: 1 })
+        .lean();
 
+      if (!kurators.length) return ctx.reply("Hozircha faol kurator yo'q.");
+
+      const rows = kurators.map((k) => {
+        const label = k.filials?.length ? `${k.fullName} (${k.filials.join(", ")})` : k.fullName;
+        return [Markup.button.callback(label, `sup_kur_${k._id}`)];
+      });
+
+      await ctx.reply(`🧑‍💼 *Kuratorlar ro'yxati* (${kurators.length} ta)\n\nBirini tanlang:`, {
+        parse_mode: "Markdown",
+        reply_markup: Markup.inlineKeyboard(rows).reply_markup
+      });
+    } catch (err) {
+      console.error("[bot] Kuratorlar error:", err.message);
+      await ctx.reply("Xatolik yuz berdi: " + err.message);
+    }
+  });
+
+  // ── Support: kurator batafsil ma'lumoti ────────────────────────────────────
+  coddyBot.action(/^sup_kur_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isSupport(ctx)) return;
     try {
       const Group = require("../models/Group");
       const Student = require("../models/Student");
+      const kuratorId = ctx.match[1];
 
-      const mentors = await User.find({
-        role: { $in: ["mentor", "mentor_ta"] },
-        isActive: true
-      }).sort({ kuratorId: 1, fullName: 1 }).lean();
+      const [kurator, groupCount, studentCount, workerCount] = await Promise.all([
+        User.findById(kuratorId).lean(),
+        Group.countDocuments({ kuratorId }),
+        Student.countDocuments({ kuratorId, isActive: true }),
+        User.countDocuments({ kuratorId, role: { $in: ["mentor", "mentor_ta", "ta"] }, isActive: true }),
+      ]);
 
-      if (!mentors.length) {
-        return ctx.reply("Hozircha faol mentor yo'q.");
-      }
+      if (!kurator) return ctx.reply("Kurator topilmadi.");
 
-      // Group by kuratorId
-      const kuratorIds = [...new Set(mentors.map((m) => String(m.kuratorId)).filter(Boolean))];
-      const kurators = await User.find({ _id: { $in: kuratorIds }, role: "kurator" })
-        .select("fullName filials")
+      const filialText = kurator.filials?.length ? `\n📍 Filiallar: ${kurator.filials.join(", ")}` : "";
+      const regDate = kurator.createdAt
+        ? new Date(kurator.createdAt).toLocaleDateString("ru-RU")
+        : "—";
+
+      const text = [
+        `🧑‍💼 *${kurator.fullName}*`,
+        `📱 Telefon: ${kurator.phone || "—"}`,
+        filialText,
+        ``,
+        `📊 *Statistika:*`,
+        `• Guruhlar: ${groupCount}`,
+        `• O'quvchilar: ${studentCount}`,
+        `• Xodimlar: ${workerCount}`,
+        ``,
+        `📅 Ro'yxatdan: ${regDate}`,
+        `🔵 Status: ${kurator.isActive ? "Faol" : "Nofaol"}`,
+      ].filter(Boolean).join("\n");
+
+      await ctx.reply(text, { parse_mode: "Markdown" });
+    } catch (err) {
+      console.error("[bot] sup_kur error:", err.message);
+      await ctx.reply("Xatolik yuz berdi: " + err.message);
+    }
+  });
+
+  // ── Support: mentorlar ro'yxati ────────────────────────────────────────────
+  coddyBot.hears("👥 Mentorlar", async (ctx) => {
+    if (!isSupport(ctx)) return;
+    try {
+      const { Markup } = require("telegraf");
+      const mentors = await User.find({ role: { $in: ["mentor", "mentor_ta"] }, isActive: true })
+        .sort({ fullName: 1 })
         .lean();
-      const kuratorMap = Object.fromEntries(kurators.map((k) => [String(k._id), k]));
 
-      // Group mentors by kurator
-      const groups = new Map();
-      const ungrouped = [];
-      mentors.forEach((m) => {
-        const kid = String(m.kuratorId || "");
-        if (kid && kuratorMap[kid]) {
-          if (!groups.has(kid)) groups.set(kid, { kurator: kuratorMap[kid], mentors: [] });
-          groups.get(kid).mentors.push(m);
-        } else {
-          ungrouped.push(m);
-        }
+      if (!mentors.length) return ctx.reply("Hozircha faol mentor yo'q.");
+
+      const rows = mentors.map((m) => {
+        const roleTag = m.role === "mentor_ta" ? "M+TA" : "M";
+        return [Markup.button.callback(`${roleTag} • ${m.fullName}`, `sup_mentor_${m._id}`)];
       });
 
-      const { Markup } = require("telegraf");
-      const sendGroup = async (kurator, mList) => {
-        const filialText = kurator?.filials?.length ? ` • ${kurator.filials.join(", ")}` : "";
-        const header = kurator
-          ? `👤 *${kurator.fullName}*${filialText}\n`
-          : `👤 *Kuratori yo'q*\n`;
-
-        const lines = mList.map((m, i) => {
-          const roleLabel = m.role === "mentor_ta" ? "Mentor+TA" : "Mentor";
-          const phone = m.phone || "—";
-          return `${i + 1}. ${m.fullName} _(${roleLabel})_ — ${phone}`;
-        });
-
-        const inlineRows = mList.map((m) =>
-          [Markup.button.callback(`🔑 ${m.fullName}`, `sup_reset_pw_${m._id}`)]
-        );
-
-        await ctx.reply(header + lines.join("\n"), {
-          parse_mode: "Markdown",
-          reply_markup: Markup.inlineKeyboard(inlineRows).reply_markup
-        });
-      };
-
-      for (const { kurator, mentors: mList } of groups.values()) {
-        await sendGroup(kurator, mList);
-      }
-      if (ungrouped.length) {
-        await sendGroup(null, ungrouped);
-      }
+      await ctx.reply(`👥 *Mentorlar ro'yxati* (${mentors.length} ta)\n\nBirini tanlang:`, {
+        parse_mode: "Markdown",
+        reply_markup: Markup.inlineKeyboard(rows).reply_markup
+      });
     } catch (err) {
-      console.error("[bot] 👥 Mentorlar error:", err.message);
+      console.error("[bot] Mentorlar error:", err.message);
+      await ctx.reply("Xatolik yuz berdi: " + err.message);
+    }
+  });
+
+  // ── Support: mentor batafsil ma'lumoti ────────────────────────────────────
+  coddyBot.action(/^sup_mentor_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isSupport(ctx)) return;
+    try {
+      const { Markup } = require("telegraf");
+      const mentorId = ctx.match[1];
+
+      const mentor = await User.findOne({ _id: mentorId, role: { $in: ["mentor", "mentor_ta"] } }).lean();
+      if (!mentor) return ctx.reply("Mentor topilmadi.");
+
+      const kurator = mentor.kuratorId ? await User.findById(mentor.kuratorId).select("fullName filials").lean() : null;
+      const roleLabel = mentor.role === "mentor_ta" ? "Mentor + TA" : "Mentor";
+
+      const text = [
+        `👤 *${mentor.fullName}*`,
+        `🎭 Rol: ${roleLabel}`,
+        `📱 Telefon: ${mentor.phone || "—"}`,
+        `🧑‍💼 Kurator: ${kurator?.fullName || "—"}`,
+        mentor.telegramId ? `✈️ Telegram ID: ${mentor.telegramId}` : null,
+        `🔵 Status: ${mentor.isActive ? "Faol" : "Nofaol"}`,
+      ].filter(Boolean).join("\n");
+
+      await ctx.reply(text, {
+        parse_mode: "Markdown",
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback("🔑 Parolni tiklash", `sup_ask_reset_${mentorId}`)]
+        ]).reply_markup
+      });
+    } catch (err) {
+      console.error("[bot] sup_mentor error:", err.message);
+      await ctx.reply("Xatolik yuz berdi: " + err.message);
+    }
+  });
+
+  // ── Support: parol tiklash — tasdiqlash so'rovi ────────────────────────────
+  coddyBot.action(/^sup_ask_reset_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isSupport(ctx)) return;
+    try {
+      const { Markup } = require("telegraf");
+      const mentorId = ctx.match[1];
+
+      const mentor = await User.findOne({ _id: mentorId, role: { $in: ["mentor", "mentor_ta"] } }).lean();
+      if (!mentor) return ctx.reply("Mentor topilmadi.");
+
+      await ctx.reply(
+        `⚠️ *${mentor.fullName}* parolini tiklashni tasdiqlaysizmi?\n\nParol *1234* ga o'zgartiriladi.`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: Markup.inlineKeyboard([
+            [
+              Markup.button.callback("✅ Ha", `sup_confirm_reset_${mentorId}`),
+              Markup.button.callback("❌ Yo'q", "sup_cancel_reset"),
+            ]
+          ]).reply_markup
+        }
+      );
+    } catch (err) {
+      console.error("[bot] sup_ask_reset error:", err.message);
+      await ctx.reply("Xatolik yuz berdi: " + err.message);
+    }
+  });
+
+  // ── Support: parol tiklash — support parolini so'rash ────────────────────
+  coddyBot.action(/^sup_confirm_reset_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isSupport(ctx)) return;
+    try {
+      const mentorId = ctx.match[1];
+      const mentor = await User.findOne({ _id: mentorId, role: { $in: ["mentor", "mentor_ta"] } }).lean();
+      if (!mentor) return ctx.reply("Mentor topilmadi.");
+
+      ctx.session.awaitingResetFor = { mentorId, mentorName: mentor.fullName };
+
+      await ctx.reply(
+        `🔐 *${mentor.fullName}* parolini tiklash uchun\nsupport parolini kiriting:`,
+        { parse_mode: "Markdown" }
+      );
+    } catch (err) {
+      console.error("[bot] sup_confirm_reset error:", err.message);
+      await ctx.reply("Xatolik yuz berdi: " + err.message);
+    }
+  });
+
+  // ── Support: parol tiklash — bekor qilish ─────────────────────────────────
+  coddyBot.action("sup_cancel_reset", async (ctx) => {
+    await ctx.answerCbQuery("Bekor qilindi");
+    ctx.session.awaitingResetFor = null;
+    await ctx.reply("❌ Tiklash bekor qilindi.");
+  });
+
+  // ── Support: TA lar ro'yxati ───────────────────────────────────────────────
+  coddyBot.hears("🧑‍🏫 TA lar", async (ctx) => {
+    if (!isSupport(ctx)) return;
+    try {
+      const { Markup } = require("telegraf");
+      const tas = await User.find({ role: "ta", isActive: true })
+        .sort({ fullName: 1 })
+        .lean();
+
+      if (!tas.length) return ctx.reply("Hozircha faol TA yo'q.");
+
+      const rows = tas.map((t) => [
+        Markup.button.callback(`TA • ${t.fullName}`, `sup_ta_${t._id}`)
+      ]);
+
+      await ctx.reply(`🧑‍🏫 *TA lar ro'yxati* (${tas.length} ta)\n\nBirini tanlang:`, {
+        parse_mode: "Markdown",
+        reply_markup: Markup.inlineKeyboard(rows).reply_markup
+      });
+    } catch (err) {
+      console.error("[bot] TA lar error:", err.message);
+      await ctx.reply("Xatolik yuz berdi: " + err.message);
+    }
+  });
+
+  // ── Support: TA batafsil ma'lumoti ────────────────────────────────────────
+  coddyBot.action(/^sup_ta_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!isSupport(ctx)) return;
+    try {
+      const taId = ctx.match[1];
+      const ta = await User.findOne({ _id: taId, role: "ta" }).lean();
+      if (!ta) return ctx.reply("TA topilmadi.");
+
+      const kurator = ta.kuratorId
+        ? await User.findById(ta.kuratorId).select("fullName filials").lean()
+        : null;
+
+      const text = [
+        `🧑‍🏫 *${ta.fullName}*`,
+        `🎭 Rol: TA`,
+        `📱 Telefon: ${ta.phone || "—"}`,
+        `🧑‍💼 Kurator: ${kurator?.fullName || "—"}`,
+        ta.telegramId ? `✈️ Telegram ID: ${ta.telegramId}` : null,
+        `🔵 Status: ${ta.isActive ? "Faol" : "Nofaol"}`,
+      ].filter(Boolean).join("\n");
+
+      await ctx.reply(text, { parse_mode: "Markdown" });
+    } catch (err) {
+      console.error("[bot] sup_ta error:", err.message);
       await ctx.reply("Xatolik yuz berdi: " + err.message);
     }
   });
@@ -394,34 +614,6 @@ async function startCoddyCheckBot() {
       await ctx.reply(lines.join("\n\n"), { parse_mode: "Markdown" });
     } catch (err) {
       console.error("[bot] 📊 Statistika error:", err.message);
-      await ctx.reply("Xatolik yuz berdi: " + err.message);
-    }
-  });
-
-  // ── Support: mentor parolini tiklash callback ──────────────────────────────
-  coddyBot.action(/^sup_reset_pw_(.+)$/, async (ctx) => {
-    await ctx.answerCbQuery();
-
-    if (!isSupport(ctx)) {
-      return ctx.answerCbQuery("Sizda bu amalni bajarish huquqi yo'q", { show_alert: true });
-    }
-
-    const mentorId = ctx.match[1];
-    try {
-      const mentor = await User.findOne({ _id: mentorId, role: { $in: ["mentor", "mentor_ta"] } });
-      if (!mentor) {
-        return ctx.reply("❌ Mentor topilmadi.");
-      }
-
-      mentor.password = "1234";
-      await mentor.save();
-
-      await ctx.reply(
-        `✅ *${mentor.fullName}* paroli *1234* ga tiklandi.`,
-        { parse_mode: "Markdown" }
-      );
-    } catch (err) {
-      console.error("[bot] sup_reset_pw error:", err.message);
       await ctx.reply("Xatolik yuz berdi: " + err.message);
     }
   });
