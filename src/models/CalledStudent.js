@@ -62,5 +62,7 @@ const calledStudentSchema = new mongoose.Schema({
 calledStudentSchema.index({ studentId: 1, date: 1 }, { unique: true });
 // Guruhlar page called counters: date-filtered list (daily)
 calledStudentSchema.index({ date: -1, createdAt: -1 });
+// getCalledStudents / getResults / analytics: kuratorId + date range queries
+calledStudentSchema.index({ kuratorId: 1, date: -1 });
 
 module.exports = mongoose.model("CalledStudent", calledStudentSchema);

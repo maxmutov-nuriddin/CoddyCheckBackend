@@ -92,7 +92,16 @@ function trendKeyFromAgg(group, bucket) {
   return `${bucket.year}-${bucket.month}`;
 }
 
+let _kuratorExclusionCache = null;
+let _kuratorExclusionExpiresAt = 0;
+const KURATOR_EXCLUSION_TTL_MS = 60_000;
+
 async function buildKuratorExclusion() {
+  const now = Date.now();
+  if (_kuratorExclusionCache && _kuratorExclusionExpiresAt > now) {
+    return _kuratorExclusionCache;
+  }
+
   const kurators = await User.find({ role: "kurator", isActive: true })
     .select("_id telegramId")
     .lean();
@@ -107,7 +116,7 @@ async function buildKuratorExclusion() {
     })
   ));
 
-  return {
+  const result = {
     attNonKuratorMatch: kuratorUserIds.length
       ? { mentorId: { $nin: kuratorUserIds }, taId: { $nin: kuratorUserIds } }
       : {},
@@ -116,6 +125,10 @@ async function buildKuratorExclusion() {
       ...(kuratorTelegramIds.length ? { teacherId: { $nin: kuratorTelegramIds } } : {})
     }
   };
+
+  _kuratorExclusionCache = result;
+  _kuratorExclusionExpiresAt = now + KURATOR_EXCLUSION_TTL_MS;
+  return result;
 }
 
 function normalizeNameKey(value) {

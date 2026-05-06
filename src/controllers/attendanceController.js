@@ -40,7 +40,15 @@ function formatGroupDisplay(name) {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
+let _kuratorIdSetCache = null;
+let _kuratorIdSetExpiresAt = 0;
+const KURATOR_ID_SET_TTL_MS = 60_000;
+
 async function loadKuratorTelegramIdSet() {
+  const now = Date.now();
+  if (_kuratorIdSetCache && _kuratorIdSetExpiresAt > now) {
+    return _kuratorIdSetCache;
+  }
   const kurators = await User.find({ role: "kurator", isActive: true })
     .select("telegramId")
     .lean();
@@ -50,6 +58,8 @@ async function loadKuratorTelegramIdSet() {
     const ids = toComparableTelegramIds(item?.telegramId);
     ids.forEach((id) => set.add(id));
   }
+  _kuratorIdSetCache = set;
+  _kuratorIdSetExpiresAt = now + KURATOR_ID_SET_TTL_MS;
   return set;
 }
 
@@ -419,6 +429,9 @@ async function syncBotCallActivityToCalledStudent(botRow, changes = {}) {
   return record;
 }
 
+const _reconciledDates = new Map();
+const RECONCILE_TTL_MS = 2 * 60_000;
+
 async function reconcileBotCallsToCalledStudentsByDate(dateInput) {
   let day;
   try {
@@ -428,6 +441,12 @@ async function reconcileBotCallsToCalledStudentsByDate(dateInput) {
   }
 
   const ymd = formatYMD(day);
+
+  const cacheExpiry = _reconciledDates.get(ymd);
+  if (cacheExpiry && cacheExpiry > Date.now()) {
+    return;
+  }
+
   const botRows = await CoddyAttendance.find({
     requestType: { $in: ["call_extra", "keep"] },
     date: ymd,
@@ -437,7 +456,10 @@ async function reconcileBotCallsToCalledStudentsByDate(dateInput) {
     ]
   }).lean();
 
-  if (!botRows.length) return;
+  if (!botRows.length) {
+    _reconciledDates.set(ymd, Date.now() + RECONCILE_TTL_MS);
+    return;
+  }
 
   for (const row of botRows) {
     try {
@@ -446,6 +468,8 @@ async function reconcileBotCallsToCalledStudentsByDate(dateInput) {
       console.error("Failed to reconcile bot call row to CalledStudent:", error.message);
     }
   }
+
+  _reconciledDates.set(ymd, Date.now() + RECONCILE_TTL_MS);
 }
 
 const manualAttendance = asyncHandler(async (req, res) => {
@@ -1035,14 +1059,17 @@ const getRecentActivity = asyncHandler(async (req, res) => {
   }
 
 
+  const fetchLimit = date ? 0 : 500;
+
   const [botRows, webRows, staff, kuratorTelegramIdSet] = await Promise.all([
-    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }).lean(),
+    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }).limit(fetchLimit).lean(),
     Attendance.find(attendanceQuery)
       .populate("studentId", "fullName")
       .populate("groupId", "name")
       .populate("mentorId", "fullName role")
       .populate("taId", "fullName role")
       .sort({ date: -1, time: -1, createdAt: -1 })
+      .limit(fetchLimit)
       .lean(),
     loadActiveStaffForMatching(),
     loadKuratorTelegramIdSet()
@@ -1228,14 +1255,17 @@ const getAllActivity = asyncHandler(async (req, res) => {
     attendanceQuery.date = { $gte: start, $lte: end };
   }
 
+  const fetchLimit = date ? 0 : 500;
+
   const [botRows, webRows, staff, kuratorTelegramIdSet] = await Promise.all([
-    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }).lean(),
+    CoddyAttendance.find(coddyQuery).sort({ createdAt: -1 }).limit(fetchLimit).lean(),
     Attendance.find(attendanceQuery)
       .populate("studentId", "fullName")
       .populate("groupId", "name")
       .populate("mentorId", "fullName role")
       .populate("taId", "fullName role")
       .sort({ date: -1, time: -1, createdAt: -1 })
+      .limit(fetchLimit)
       .lean(),
     loadActiveStaffForMatching(),
     loadKuratorTelegramIdSet()

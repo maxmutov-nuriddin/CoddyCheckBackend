@@ -1,3 +1,4 @@
+const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const Group = require("../models/Group");
 const Student = require("../models/Student");
@@ -381,8 +382,8 @@ const resetMentorPassword = asyncHandler(async (req, res) => {
   const mentor = await User.findOne({ _id: req.params.id, role: { $in: ["mentor", "mentor_ta"] } });
   if (!mentor) throw new ApiError(404, "Mentor topilmadi");
 
-  mentor.password = "1234";
-  await mentor.save();
+  const hashed = await bcrypt.hash("1234", 10);
+  await User.updateOne({ _id: mentor._id }, { $set: { password: hashed } });
 
   return ok(res, { _id: mentor._id, fullName: mentor.fullName }, "Parol 1234 ga tiklandi");
 });
