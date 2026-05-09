@@ -102,9 +102,14 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
   const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const monthEndStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(lastDay)}`;
 
-  // Load all groups (to map groupName → kuratorId) and CoddyAttendance in parallel
-  const [allGroups, coddyByGroup] = await Promise.all([
+  // CalledStudent uses Date objects
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+  // Load all groups, CoddyAttendance (bot), and CalledStudent (web) in parallel
+  const [allGroups, coddyByGroup, webByKurator] = await Promise.all([
     Group.find({}).select("name kuratorId").lean(),
+
     CoddyAttendance.aggregate([
       {
         $match: {
@@ -163,6 +168,25 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
           }
         }
       }
+    ]),
+
+    // Web platformadan (CalledStudent): lastStatus bo'yicha kuratorId ga guruhlab hisoblash
+    CalledStudent.aggregate([
+      {
+        $match: {
+          date: { $gte: monthStart, $lte: monthEnd },
+          kuratorId: { $ne: null },
+          lastStatus: { $in: ["keldi", "kelmadi"] }
+        }
+      },
+      {
+        $group: {
+          _id: "$kuratorId",
+          came:    { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] },   1, 0] } },
+          notCame: { $sum: { $cond: [{ $eq: ["$lastStatus", "kelmadi"] }, 1, 0] } },
+          called:  { $sum: 1 }
+        }
+      }
     ])
   ]);
 
@@ -196,6 +220,20 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
     prev.notCame += row.notCame;
     prev.total += row.total;
     prev.called += row.called;
+    kuratorAttMap.set(kid, prev);
+  }
+
+  // Web platform (CalledStudent) natijalarini qo'shish
+  for (const row of webByKurator) {
+    const kid = row._id?.toString();
+    if (!kid) continue;
+    globalCame    += row.came;
+    globalNotCame += row.notCame;
+    globalCalled  += row.called;
+    const prev = kuratorAttMap.get(kid) || { came: 0, notCame: 0, total: 0, called: 0 };
+    prev.came    += row.came;
+    prev.notCame += row.notCame;
+    prev.called  += row.called;
     kuratorAttMap.set(kid, prev);
   }
 
