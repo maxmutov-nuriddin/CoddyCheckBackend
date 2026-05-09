@@ -121,6 +121,7 @@ const getDashboard = asyncHandler(async (req, res) => {
     groupsCount: groups.length,
     totalStudents,
     cameToday,
+    botConnected: !!req.user.telegramId,
     groups: groups.map((g) => {
       const s = statsByGroup[String(g._id)] || {};
       const total = Object.values(s).reduce((a, b) => a + b, 0);
