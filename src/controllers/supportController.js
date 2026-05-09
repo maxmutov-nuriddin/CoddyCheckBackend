@@ -254,12 +254,15 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
     kurators.map(async (k) => {
       const kuratorId = k._id;
 
-      const [activeStudents, leadStudents, allStudents, totalGroups, totalWorkers] = await Promise.all([
+      const [activeStudents, leadStudents, allStudents, totalGroups, totalWorkers, goodStudents, averageStudents, poorStudents] = await Promise.all([
         Student.countDocuments({ kuratorId, isActive: true, frozenStatus: { $nin: [...FROZEN_STATUSES, "lead"] } }),
         Student.countDocuments({ kuratorId, isActive: true, frozenStatus: "lead" }),
         Student.countDocuments({ kuratorId, isActive: true }),
         Group.countDocuments({ kuratorId }),
         User.countDocuments({ kuratorId, role: { $in: ["mentor", "ta", "mentor_ta"] }, isActive: true }),
+        Student.countDocuments({ kuratorId, isActive: true, frozenStatus: "good" }),
+        Student.countDocuments({ kuratorId, isActive: true, frozenStatus: "average" }),
+        Student.countDocuments({ kuratorId, isActive: true, frozenStatus: "poor" }),
       ]);
 
       const att = kuratorAttMap.get(kuratorId.toString()) || { came: 0, notCame: 0, total: 0, called: 0 };
@@ -278,6 +281,9 @@ const getAllKuratorsAnalytics = asyncHandler(async (req, res) => {
           leadStudents,
           inactiveStudents: allStudents - activeStudents - leadStudents,
           allStudents,
+          goodStudents,
+          averageStudents,
+          poorStudents,
           totalGroups,
           totalWorkers,
           thisMonth: {
