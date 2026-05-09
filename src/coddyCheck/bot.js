@@ -370,37 +370,30 @@ async function startCoddyCheckBot() {
     await ctx.answerCbQuery();
     if (!isSupport(ctx)) return;
     try {
-      const Group = require("../models/Group");
-      const Student = require("../models/Student");
       const kuratorId = ctx.match[1];
-
-      const [kurator, groupCount, studentCount, workerCount] = await Promise.all([
-        User.findById(kuratorId).lean(),
-        Group.countDocuments({ kuratorId }),
-        Student.countDocuments({ kuratorId, isActive: true }),
-        User.countDocuments({ kuratorId, role: { $in: ["mentor", "mentor_ta", "ta"] }, isActive: true }),
-      ]);
-
+      const kurator = await User.findById(kuratorId).lean();
       if (!kurator) return ctx.reply("Kurator topilmadi.");
 
-      const filialText = kurator.filials?.length ? `\n📍 Filiallar: ${kurator.filials.join(", ")}` : "";
-      const regDate = kurator.createdAt
-        ? new Date(kurator.createdAt).toLocaleDateString("ru-RU")
+      const joinDate = kurator.createdAt
+        ? new Date(kurator.createdAt).toLocaleDateString("ru-RU", { day: "2-digit", month: "short", year: "numeric" })
         : "—";
+      const statusText = kurator.isActive ? "✅ Faol" : "🔴 To'xtatilgan";
+      const tgText = kurator.telegramId ? `✈️ ${kurator.telegramId}` : "✈️ Telegram ulanmagan";
+      const filialsText = kurator.filials?.length
+        ? kurator.filials.join(" · ")
+        : "Filial belgilanmagan";
 
       const text = [
         `🧑‍💼 *${kurator.fullName}*`,
-        `📱 Telefon: ${kurator.phone || "—"}`,
-        filialText,
         ``,
-        `📊 *Statistika:*`,
-        `• Guruhlar: ${groupCount}`,
-        `• O'quvchilar: ${studentCount}`,
-        `• Xodimlar: ${workerCount}`,
+        `📱 ${kurator.phone || "—"}`,
+        tgText,
         ``,
-        `📅 Ro'yxatdan: ${regDate}`,
-        `🔵 Status: ${kurator.isActive ? "Faol" : "Nofaol"}`,
-      ].filter(Boolean).join("\n");
+        `📍 ${filialsText}`,
+        ``,
+        `📅 Ro'yxatdan: ${joinDate}`,
+        `🔵 Status: ${statusText}`,
+      ].join("\n");
 
       await ctx.reply(text, { parse_mode: "Markdown" });
     } catch (err) {
@@ -588,33 +581,112 @@ async function startCoddyCheckBot() {
     try {
       const Group = require("../models/Group");
       const Student = require("../models/Student");
+      const CalledStudent = require("../models/CalledStudent");
+      const CoddyAttendance = require("./models/CoddyAttendance");
 
       const kurators = await User.find({ role: "kurator", isActive: true })
-        .select("fullName filials")
+        .select("fullName filials _id")
         .lean();
 
       if (!kurators.length) {
         return ctx.reply("Hozircha faol kurator yo'q.");
       }
 
-      const lines = ["📊 *Kurator statistikasi*\n"];
+      const FROZEN_ST = ["frozen", "muzlatilgan", "qarzdor", "qaytadi"];
+      const pad = (n) => String(n).padStart(2, "0");
+      const now = new Date();
+      const monthStartStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      const monthEndStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(lastDay)}`;
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+      const normalize  = (n) => n.toLowerCase().replace(/[-\s]/g, "");
+
+      // Load all groups and CoddyAttendance + CalledStudent in parallel
+      const [allGroups, coddyRows, csRows] = await Promise.all([
+        Group.find({}).select("name kuratorId").lean(),
+        CoddyAttendance.aggregate([
+          { $match: { date: { $gte: monthStartStr, $lte: monthEndStr }, studentGroup: { $nin: ["-", "–", "—", "", " "] } } },
+          { $group: {
+            _id: { $replaceAll: { input: { $replaceAll: { input: { $toLower: "$studentGroup" }, find: "-", replacement: "" } }, find: " ", replacement: "" } },
+            total:   { $sum: { $cond: [{ $eq: ["$requestType", "mark"] }, 1, 0] } },
+            called:  { $sum: { $cond: { if: { $and: [{ $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Kutilmoqda"] }] }, then: 1, else: 0 } } },
+            came:    { $sum: { $cond: { if: { $and: [{ $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Keldi"] }] }, then: 1, else: 0 } } },
+            notCame: { $sum: { $cond: { if: { $and: [{ $in: ["$requestType", ["call_extra", "keep"]] }, { $eq: ["$status", "Kelmadi"] }] }, then: 1, else: 0 } } },
+          }}
+        ]),
+        CalledStudent.aggregate([
+          { $match: { date: { $gte: monthStart, $lte: monthEnd }, kuratorId: { $ne: null }, lastStatus: { $in: ["keldi", "kelmadi"] } } },
+          { $group: { _id: "$kuratorId",
+            came:    { $sum: { $cond: [{ $eq: ["$lastStatus", "keldi"] },   1, 0] } },
+            notCame: { $sum: { $cond: [{ $eq: ["$lastStatus", "kelmadi"] }, 1, 0] } },
+            called:  { $sum: 1 }
+          }}
+        ]),
+      ]);
+
+      // Build group→kuratorId map
+      const groupToKurator = new Map();
+      for (const g of allGroups) {
+        if (g.kuratorId) groupToKurator.set(normalize(g.name), g.kuratorId.toString());
+      }
+
+      // Build attMap per kuratorId
+      const attMap = new Map();
+      for (const row of coddyRows) {
+        const kid = groupToKurator.get(row._id);
+        if (!kid) continue;
+        const prev = attMap.get(kid) || { total: 0, called: 0, came: 0, notCame: 0 };
+        prev.total += row.total; prev.called += row.called;
+        prev.came += row.came;  prev.notCame += row.notCame;
+        attMap.set(kid, prev);
+      }
+      for (const row of csRows) {
+        const kid = String(row._id);
+        const prev = attMap.get(kid) || { total: 0, called: 0, came: 0, notCame: 0 };
+        prev.came += row.came; prev.notCame += row.notCame; prev.called += row.called;
+        attMap.set(kid, prev);
+      }
+
+      const SEP = "━━━━━━━━━━━━━━━━━━━━━━";
+      const lines = [`📊 *Kurator statistikasi*\n${SEP}`];
       for (const k of kurators) {
         const kuratorId = k._id;
-        const [groupCount, studentCount, mentorCount] = await Promise.all([
-          Group.countDocuments({ kuratorId }),
+        const [activeStudents, leadStudents, allStudents, totalGroups, totalWorkers, goodStudents, averageStudents, poorStudents] = await Promise.all([
+          Student.countDocuments({ kuratorId, isActive: true, frozenStatus: { $nin: [...FROZEN_ST, "lead"] } }),
+          Student.countDocuments({ kuratorId, isActive: true, frozenStatus: "lead" }),
           Student.countDocuments({ kuratorId, isActive: true }),
-          User.countDocuments({ kuratorId, role: { $in: ["mentor", "mentor_ta", "ta"] }, isActive: true })
+          Group.countDocuments({ kuratorId }),
+          User.countDocuments({ kuratorId, role: { $in: ["mentor", "mentor_ta", "ta"] }, isActive: true }),
+          Student.countDocuments({ kuratorId, isActive: true, frozenStatus: "good" }),
+          Student.countDocuments({ kuratorId, isActive: true, frozenStatus: "average" }),
+          Student.countDocuments({ kuratorId, isActive: true, frozenStatus: "poor" }),
         ]);
-        const filialText = k.filials?.length ? ` _(${k.filials.join(", ")})_` : "";
+
+        const inactiveStudents = allStudents - activeStudents - leadStudents;
+        const att = attMap.get(String(kuratorId)) || { total: 0, called: 0, came: 0, notCame: 0 };
+        const resolved = att.came + att.notCame;
+        const rate = resolved > 0 ? Math.round((att.came / resolved) * 100) : null;
+
+        const filialText = k.filials?.length ? `\n📍 ${k.filials.join(" · ")}` : "";
+        const attLine = rate !== null
+          ? `📅 ${att.total} belgi | ✅${att.came} ❌${att.notCame} | 📈${rate}%`
+          : `📅 Ma'lumot yo'q`;
+
         lines.push(
           `👤 *${k.fullName}*${filialText}\n` +
-          `  • Guruhlar: ${groupCount}\n` +
-          `  • O'quvchilar: ${studentCount}\n` +
-          `  • Xodimlar: ${mentorCount}`
+          `🏫 ${totalGroups} guruh  👥 ${totalWorkers} xodim\n` +
+          `✅${activeStudents} 🏆${leadStudents} 🚫${inactiveStudents} 📋${allStudents} ta o'q.\n` +
+          `🟢${goodStudents} Yaxshi  🟡${averageStudents} O'rtacha  🔴${poorStudents} Yomon\n` +
+          attLine +
+          `\n${SEP}`
         );
       }
 
-      await ctx.reply(lines.join("\n\n"), { parse_mode: "Markdown" });
+      const chunks = lines.join("\n\n").match(/[\s\S]{1,4000}/g) || [];
+      for (const chunk of chunks) {
+        await ctx.reply(chunk, { parse_mode: "Markdown" });
+      }
     } catch (err) {
       console.error("[bot] 📊 Statistika error:", err.message);
       await ctx.reply("Xatolik yuz berdi: " + err.message);
