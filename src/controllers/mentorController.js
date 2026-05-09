@@ -102,11 +102,45 @@ const getDashboard = asyncHandler(async (req, res) => {
     cameToday = todayCalls.length;
   }
 
+  // Har bir guruh uchun status statistikasini hisoblash
+  const statusCounts = groupIds.length
+    ? await Student.aggregate([
+        { $match: { groupId: { $in: groupIds }, kuratorId, isActive: true } },
+        { $group: { _id: { groupId: "$groupId", status: "$frozenStatus" }, count: { $sum: 1 } } }
+      ])
+    : [];
+
+  const statsByGroup = {};
+  statusCounts.forEach(({ _id: { groupId, status }, count }) => {
+    const gId = String(groupId);
+    if (!statsByGroup[gId]) statsByGroup[gId] = {};
+    statsByGroup[gId][status] = count;
+  });
+
   return ok(res, {
     groupsCount: groups.length,
     totalStudents,
     cameToday,
-    groups: groups.map((g) => ({ _id: g._id, name: g.name, days: g.days, time: g.time }))
+    groups: groups.map((g) => {
+      const s = statsByGroup[String(g._id)] || {};
+      const total = Object.values(s).reduce((a, b) => a + b, 0);
+      return {
+        _id: g._id,
+        name: g.name,
+        days: g.days,
+        time: g.time,
+        stats: {
+          good: s.good || 0,
+          average: s.average || 0,
+          poor: s.poor || 0,
+          lead: s.lead || 0,
+          frozen: (s.frozen || 0) + (s.muzlatilgan || 0),
+          qarzdor: s.qarzdor || 0,
+          qaytadi: s.qaytadi || 0,
+          total
+        }
+      };
+    })
   });
 });
 
