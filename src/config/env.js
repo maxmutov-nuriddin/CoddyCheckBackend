@@ -42,5 +42,6 @@ module.exports = {
   coddyBotToken: process.env.CODDY_BOT_TOKEN || process.env.BOT_TOKEN || "",
   coddyPublicUrl: process.env.CODDY_PUBLIC_URL || process.env.PUBLIC_URL || "",
   coddyAdminIds: parseNumericList(process.env.CODDY_ADMIN_IDS || process.env.ADMIN_IDS),
-  coddyAllowedIds: parseNumericList(process.env.CODDY_ALLOWED_IDS || process.env.ALLOWED_IDS)
+  coddyAllowedIds: parseNumericList(process.env.CODDY_ALLOWED_IDS || process.env.ALLOWED_IDS),
+  siteUrl: process.env.SITE_URL || ""
 };

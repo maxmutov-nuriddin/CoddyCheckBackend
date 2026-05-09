@@ -251,55 +251,61 @@ async function startCoddyCheckBot() {
   coddyBot.hears("ℹ️ Yordam", (ctx) => {
     const { Markup } = require("telegraf");
     const role = String(ctx.state?.worker?.role || "").toLowerCase();
-    let text;
+    const siteUrl = env.siteUrl;
+    const siteLine = siteUrl ? `\n🌐 Sayt: ${siteUrl}` : "";
 
     if (role === "support") {
       return ctx.reply(
-        "ℹ️ Support yordam:\n\n" +
-        "👥 Mentorlar:\n" +
-        "Barcha mentorlar ro'yxatini va ularning kurator/filial ma'lumotlarini ko'rish, parolini tiklash.\n\n" +
-        "📊 Statistika:\n" +
-        "Har bir kurator bo'yicha guruhlar, o'quvchilar va xodimlar soni.\n\n" +
-        "Har qanday vaziyat uchun: /start\n\n" +
-        "Muammo bo'lsa: @mv_nuriddin"
+        "ℹ️ *Support yordam*\n\n" +
+        "👥 *Mentorlar* — ro'yxat, kurator/filial ma'lumotlari, parol tiklash.\n\n" +
+        "📊 *Statistika* — har bir kurator bo'yicha guruhlar, o'quvchilar va xodimlar soni.\n\n" +
+        "Har qanday vaziyat uchun: /start" +
+        siteLine + "\n" +
+        "Muammo bo'lsa: @mv\\_nuriddin",
+        { parse_mode: "Markdown", disable_web_page_preview: true }
       );
     }
 
+    let text;
     if (role === "mentor") {
       text =
-        "📣 O'quvchi chaqirish:\n" +
-        "Darsga kelmagan o'quvchini chaqirish uchun '📣 O'quvchi chaqirish' tugmasini bosing va ko'rsatmalarga amal qiling.\n\n" +
-        "💬 Murojat:\n" +
-        "Kuratorga o'quvchi bo'yicha murojat yuborish uchun '💬 Murojat' tugmasini bosing.\n\n" +
-        "Har qanday vaziyat uchun: /start\n\n" +
-        "Shikoyat va takliflar uchun: @mv_nuriddin";
+        "ℹ️ *Yordam*\n\n" +
+        "📣 *O'quvchi chaqirish* — darsga kelmagan o'quvchini chaqirish.\n\n" +
+        "💬 *Murojat* — kuratorga o'quvchi bo'yicha xabar yuborish.\n\n" +
+        "Har qanday vaziyat uchun: /start" +
+        siteLine + "\n" +
+        "Shikoyat va takliflar: @mv\\_nuriddin";
     } else if (role === "ta") {
       text =
-        "➕ O'quvchi qo'shish:\n" +
-        "Kelgan o'quvchini davomatga qo'shish uchun '➕ O'quvchi qo'shish' tugmasini bosing.\n\n" +
-        "Har qanday vaziyat uchun: /start\n\n" +
-        "Shikoyat va takliflar uchun: @mv_nuriddin";
+        "ℹ️ *Yordam*\n\n" +
+        "➕ *O'quvchi qo'shish* — kelgan o'quvchini davomatga qo'shish.\n\n" +
+        "Har qanday vaziyat uchun: /start\n" +
+        "Shikoyat va takliflar: @mv\\_nuriddin";
     } else if (role === "mentor_ta") {
       text =
-        "📣 O'quvchi chaqirish:\n" +
-        "Darsga kelmagan o'quvchini chaqirish uchun '📣 O'quvchi chaqirish' tugmasini bosing va ko'rsatmalarga amal qiling.\n\n" +
-        "💬 Murojat:\n" +
-        "Kuratorga o'quvchi bo'yicha murojat yuborish uchun '💬 Murojat' tugmasini bosing.\n\n" +
-        "➕ O'quvchi qo'shish:\n" +
-        "Kelgan o'quvchini davomatga qo'shish uchun '➕ O'quvchi qo'shish' tugmasini bosing.\n\n" +
-        "Har qanday vaziyat uchun: /start\n\n" +
-        "Shikoyat va takliflar uchun: @mv_nuriddin";
+        "ℹ️ *Yordam*\n\n" +
+        "📣 *O'quvchi chaqirish* — darsga kelmagan o'quvchini chaqirish.\n\n" +
+        "💬 *Murojat* — kuratorga xabar yuborish.\n\n" +
+        "➕ *O'quvchi qo'shish* — kelgan o'quvchini davomatga qo'shish.\n\n" +
+        "Har qanday vaziyat uchun: /start" +
+        siteLine + "\n" +
+        "Shikoyat va takliflar: @mv\\_nuriddin";
     } else {
       text =
-        "ℹ️ Yordam:\n" +
+        "ℹ️ *Yordam*\n\n" +
         "Menyudagi tugmalar orqali ishlang.\n\n" +
-        "Har qanday vaziyat uchun: /start\n\n" +
-        "Shikoyat va takliflar uchun: @mv_nuriddin";
+        "Har qanday vaziyat uchun: /start" +
+        siteLine + "\n" +
+        "Shikoyat va takliflar: @mv\\_nuriddin";
     }
 
-    return ctx.reply(text, Markup.inlineKeyboard([
-      Markup.button.callback("📨 Kuratorga xabar yuborish", "msg_kur")
-    ]));
+    return ctx.reply(text, {
+      parse_mode: "Markdown",
+      disable_web_page_preview: true,
+      ...( role !== "ta" ? { reply_markup: Markup.inlineKeyboard([
+        Markup.button.callback("📨 Kuratorga xabar yuborish", "msg_kur")
+      ]).reply_markup } : {})
+    });
   });
 
   coddyBot.action("msg_kur", (ctx) => {
