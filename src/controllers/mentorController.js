@@ -20,8 +20,12 @@ const getMyGroups = asyncHandler(async (req, res) => {
 
 const getMyStudents = asyncHandler(async (req, res) => {
   const { fullName, kuratorId } = req.user;
+  const { days } = req.query; // 'Toq' | 'Juft' | undefined
 
-  const groups = await Group.find({ mentor: fullName, kuratorId }).lean();
+  const groupQuery = { mentor: fullName, kuratorId };
+  if (days === "Toq" || days === "Juft") groupQuery.days = days;
+
+  const groups = await Group.find(groupQuery).lean();
   if (!groups.length) {
     return ok(res, []);
   }
@@ -32,7 +36,8 @@ const getMyStudents = asyncHandler(async (req, res) => {
   const students = await Student.find({
     groupId: { $in: groupIds },
     kuratorId,
-    isActive: true
+    isActive: true,
+    frozenStatus: { $nin: LOCKED_STATUSES }
   })
     .sort({ groupId: 1, fullName: 1 })
     .lean();
