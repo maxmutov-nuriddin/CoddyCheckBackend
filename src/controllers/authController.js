@@ -181,7 +181,7 @@ const updateProfile = asyncHandler(async (req, res) => {
   const phone = normalizePhone(req.body);
   const { telegramId } = req.body;
 
-  if (fullName) user.fullName = fullName;
+  if (fullName && !["mentor", "mentor_ta"].includes(req.user.role)) user.fullName = fullName;
 
   if (phone) {
     const existing = await User.findOne({ phone, _id: { $ne: user._id } });
