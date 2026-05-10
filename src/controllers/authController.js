@@ -189,7 +189,9 @@ const updateProfile = asyncHandler(async (req, res) => {
     user.phone = phone;
   }
 
-  if (telegramId !== undefined) user.telegramId = telegramId || null;
+  if (telegramId !== undefined && !["mentor", "mentor_ta"].includes(req.user.role)) {
+    user.telegramId = telegramId || null;
+  }
 
   await user.save();
 
