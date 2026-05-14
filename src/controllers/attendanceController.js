@@ -1201,7 +1201,8 @@ const deleteActivity = asyncHandler(async (req, res) => {
     const requestType = String(request?.requestType || "").toLowerCase();
     const isCallRequest = requestType === "call_extra" || requestType === "keep";
     const isTalkRequest = requestType === "talk_request";
-    if (request && isCallRequest && request.callConfirmed === false && request.teacherId) {
+    const skipNotify = req.query.skipNotify === "true";
+    if (!skipNotify && request && isCallRequest && request.callConfirmed === false && request.teacherId) {
       const bot = getBotInstance();
       if (bot) {
         const message = [
@@ -1218,7 +1219,7 @@ const deleteActivity = asyncHandler(async (req, res) => {
         });
       }
     }
-    if (request && isTalkRequest && request.teacherId) {
+    if (!skipNotify && request && isTalkRequest && request.teacherId) {
       const bot = getBotInstance();
       if (bot) {
         const message = [
@@ -1859,6 +1860,66 @@ const updateCalledStudent = asyncHandler(async (req, res) => {
   return ok(res, record, "Called student record updated");
 });
 
+const dismissFromCall = asyncHandler(async (req, res) => {
+  const { studentId, studentName, groupName, reason } = req.body;
+
+  if (!reason || !String(reason).trim()) {
+    throw new ApiError(400, "Sabab majburiy");
+  }
+
+  const cleanReason = normalizeCompactText(reason);
+
+  let student = null;
+  if (studentId) {
+    student = await Student.findById(studentId)
+      .populate("groupId", "name mentor")
+      .lean();
+  } else if (studentName) {
+    const nameRegex = new RegExp(`^${escapeRegExp(normalizeCompactText(studentName))}$`, "i");
+    student = await Student.findOne({ fullName: nameRegex, isActive: true })
+      .populate("groupId", "name mentor")
+      .lean();
+  }
+
+  const talkDate = normalizeDateOnly(new Date());
+  const talkComment = `Atmen qilindi: ${cleanReason}`;
+
+  if (student?._id) {
+    await StudentTalk.findOneAndUpdate(
+      { studentId: student._id },
+      {
+        $inc: { talkCount: 1 },
+        $push: { talks: { date: talkDate, comment: talkComment, createdAt: new Date() } },
+        $setOnInsert: { groupId: student.groupId?._id || undefined }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+  }
+
+  const mentorName = student?.groupId?.mentor || normalizeCompactText(groupName);
+  if (mentorName) {
+    const mentorUser = await User.findOne({
+      fullName: new RegExp(`^${escapeRegExp(mentorName)}$`, "i"),
+      role: { $in: ["mentor", "mentor_ta"] },
+      isActive: true
+    }).select("telegramId").lean();
+
+    if (mentorUser?.telegramId) {
+      const bot = getBotInstance();
+      if (bot) {
+        const displayName = student?.fullName || normalizeCompactText(studentName) || "Noma'lum o'quvchi";
+        const displayGroup = student?.groupId?.name || normalizeCompactText(groupName) || "-";
+        const message = `❌ O'quvchi chaqiruvdan chiqarildi\n\n👤 ${displayName}\n📚 Guruh: ${displayGroup}\n📝 Sabab: ${cleanReason}`;
+        bot.telegram.sendMessage(String(mentorUser.telegramId), message).catch((err) => {
+          console.error("dismissFromCall: mentor notification error:", err.message);
+        });
+      }
+    }
+  }
+
+  return ok(res, { studentId: student?._id || null }, "O'quvchi chaqiruvdan chiqarildi");
+});
+
 module.exports = {
   manualAttendance,
   queueTaNotification,
@@ -1883,7 +1944,8 @@ module.exports = {
   deleteStudentTalkEntry,
   deleteCalledStudent,
   updateActivity,
-  updateCalledStudent
+  updateCalledStudent,
+  dismissFromCall
 };
 
 

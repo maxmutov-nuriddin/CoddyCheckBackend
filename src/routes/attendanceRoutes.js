@@ -21,7 +21,8 @@ const {
   getStudentTalks,
   deleteStudentTalkEntry,
   deleteCalledStudent,
-  updateCalledStudent
+  updateCalledStudent,
+  dismissFromCall
 } = require("../controllers/attendanceController");
 const authMiddleware = require("../middlewares/authMiddleware");
 const allowRoles = require("../middlewares/roleMiddleware");
@@ -54,5 +55,6 @@ router.get("/student-talks", getStudentTalks);
 router.delete("/student-talks/:recordId/entries/:talkId", deleteStudentTalkEntry);
 router.delete("/called-students/:id", deleteCalledStudent);
 router.patch("/called-students/:id", updateCalledStudent);
+router.post("/dismiss-from-call", dismissFromCall);
 
 module.exports = router;
