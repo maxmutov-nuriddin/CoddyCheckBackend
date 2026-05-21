@@ -656,7 +656,7 @@ const confirmBotCallRequest = asyncHandler(async (req, res) => {
 });
 
 const callStudent = asyncHandler(async (req, res) => {
-  const { studentId, date, time, comment = "" } = req.body;
+  const { studentId, date, time, comment = "", taComment = "" } = req.body;
   const kuratorId = req.user._id;
 
   if (!studentId || !date) {
@@ -720,6 +720,7 @@ const callStudent = asyncHandler(async (req, res) => {
     callStatus: "chaqirilgan",
     attendanceStatus: null,
     comment,
+    taComment: String(taComment || "").trim(),
     botIntegration: true,
     kuratorId
   });
@@ -1414,7 +1415,7 @@ const getBotCalls = asyncHandler(async (req, res) => {
 });
 
 const createCalledStudent = asyncHandler(async (req, res) => {
-  const { studentId, date, time = "", comment = "" } = req.body;
+  const { studentId, date, time = "", comment = "", taComment = "" } = req.body;
   const kuratorId = req.user._id;
 
   if (!studentId || !date) throw new ApiError(400, "studentId and date are required");
@@ -1440,6 +1441,7 @@ const createCalledStudent = asyncHandler(async (req, res) => {
   const callEntry = {
     time: String(time || "").trim(),
     comment: String(comment || "").trim(),
+    taComment: String(taComment || "").trim(),
     status: "pending",
     calledAt: new Date()
   };
@@ -1782,7 +1784,7 @@ const updateActivity = asyncHandler(async (req, res) => {
 
 const updateCalledStudent = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { comment, status, date, time } = req.body;
+  const { comment, taComment, status, date, time } = req.body;
 
   const record = await CalledStudent.findById(id);
   if (!record) throw new ApiError(404, "Called student record not found");
@@ -1798,11 +1800,14 @@ const updateCalledStudent = asyncHandler(async (req, res) => {
   }
 
   if (typeof comment !== "undefined" && record.calls.length > 0) {
-    // Update the comment of the most recent call
     record.calls[record.calls.length - 1].comment = comment;
     if (status) {
       record.calls[record.calls.length - 1].status = status === "Kutilmoqda" ? "pending" : status.toLowerCase();
     }
+  }
+
+  if (typeof taComment !== "undefined" && record.calls.length > 0) {
+    record.calls[record.calls.length - 1].taComment = String(taComment || "").trim();
   }
 
   if (typeof time !== "undefined" && record.calls.length > 0) {

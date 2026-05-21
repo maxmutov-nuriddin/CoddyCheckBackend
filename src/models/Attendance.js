@@ -47,6 +47,10 @@ const attendanceSchema = new mongoose.Schema(
       type: String,
       default: ""
     },
+    taComment: {
+      type: String,
+      default: ""
+    },
     botIntegration: {
       type: Boolean,
       default: false

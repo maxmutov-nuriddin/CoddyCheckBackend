@@ -21,7 +21,9 @@ function attendanceLine(row, idx) {
   const student = row.studentId?.fullName || "Deleted student";
   const group = row.groupId?.name || "-";
   const time = row.time ? new Date(row.time).toTimeString().slice(0, 5) : "--:--";
-  return `${idx + 1}. ${student} (${group}) - ${time}`;
+  const topic = String(row.taComment || "").trim();
+  const line = `${idx + 1}. ${student} (${group}) - ${time}`;
+  return topic ? `${line}\n   📌 Mavzu: ${topic}` : line;
 }
 
 function buildInlineButtons(rows) {

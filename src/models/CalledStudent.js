@@ -14,6 +14,10 @@ const callEntrySchema = new mongoose.Schema({
       enum: ["pending", "keldi", "kelmadi"],
       default: "pending"
    },
+   taComment: {
+      type: String,
+      default: ""
+   },
    calledAt: {
       type: Date,
       default: Date.now
